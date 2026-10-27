@@ -1882,6 +1882,10 @@ cmd_kiosk_enable() {
     # The kiosk reaches the dashboard over loopback; trust it so the touchscreen
     # can operate controls (a management client never presents a loopback addr).
     config_set web trust_localhost true
+    # The daemon caches [web] config at startup, so re-read it now -- otherwise
+    # the loopback trust doesn't take effect and the kiosk gets a login prompt
+    # until the next reboot.
+    systemctl try-restart "$PWN_DAEMON_SERVICE" 2>/dev/null || true
     systemctl enable --now "$PWN_KIOSK_SERVICE"
     log "kiosk enabled on the HDMI screen (showing $(cfg kiosk.url http://127.0.0.1:8080/))"
     log "if the screen stays blank, see docs/user-guide/kiosk-setup.md (seat/GPU groups, config.txt)"
@@ -1892,6 +1896,9 @@ cmd_kiosk_disable() {
     config_set kiosk enabled false
     # Restore the stricter default: stop trusting loopback once the kiosk is off.
     config_set web trust_localhost false
+    # Re-read [web] config so loopback stops being trusted right away (the daemon
+    # caches it at startup).
+    systemctl try-restart "$PWN_DAEMON_SERVICE" 2>/dev/null || true
     systemctl disable --now "$PWN_KIOSK_SERVICE" 2>/dev/null || true
     log "kiosk disabled"
 }
