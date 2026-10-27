@@ -131,3 +131,37 @@ How to use this file:
 - **What to do:** add a step to `.forgejo/workflows/test.yml` that installs
   `markdown-it-py` and `Pillow` and runs the tool's tests.
 - **Trigger:** the tool's renderer starts changing often.
+
+## Quick-crack (Kestrel-Unleashed on-device crack)
+
+### Show the cracked count on the e-ink face
+
+- **What:** the daemon already publishes a `crack` readout service (the worker's
+  cracked/pending counts, last crack), alongside `agent`/`battery`/`position`,
+  but the e-ink face (`builder/extra/files/plugins/eink.py`) does not yet render
+  it. Loot is fully surfaced on the web `/loot` page (which serves the device's
+  own screen in kiosk mode, a phone, and a desktop browser) and the CLI; the
+  2.7" e-ink HAT is an optional, ship-disabled accessory.
+- **Why deferred:** the 264×176 panel layout is tight and already full (icon
+  strip, mascot, status/info/counter rows); adding a cracked counter needs a
+  careful layout pass to avoid crowding, which isn't worth the risk for an
+  accessory display when the web page already covers "on screen".
+- **What to do:** add `"crack"` to the face's `__optional_requires__`, read
+  `context.services.get("crack")` (or the shared `MoodInputs`), and show a
+  compact `CRK <cracked>` on the counter row (next to `PWND`) or a milestone
+  mood on a new crack — reusing `kestrel_pi.crack.readout.face_summary()`.
+- **Pick up when:** the e-ink face layout is next revised, or an operator asks
+  for the cracked count on the panel.
+
+### Optional hashcat mask passes
+
+- **What:** cracking is dictionary-only (`-a 0`). Pure-numeric WPA keys (common
+  on consumer routers) are better covered by a mask attack
+  (`-a 3 ?d?d?d?d?d?d?d?d`), which the worker does not run.
+- **Why deferred:** keeps the first cut simple (one attack mode, one job shape);
+  masks add a second job type and their own time budgeting on a slow CPU.
+- **What to do:** add an optional `[crack] masks` list that the worker runs as
+  extra passes (a job `mode` of dict|mask), tracked in the tried-set like a
+  wordlist signature so "leave it alone" still holds.
+- **Pick up when:** numeric-PSK networks are common enough in the operator's
+  environment to be worth the extra runtime.

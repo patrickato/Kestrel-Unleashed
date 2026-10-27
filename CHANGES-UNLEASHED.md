@@ -38,8 +38,50 @@ The authorized-use warnings in the UI and docs are retained. The default `pi` /
 `raspberry` login and the secrets-free policy are unchanged; supply a real
 password and any real network details at build time, never in a commit.
 
+### Added: firmware for the common USB capture dongles
+`builder/config.yml` adds `firmware-atheros`, `firmware-libertas`,
+`firmware-mediatek` and `firmware-realtek` to the image, so the usual external
+adapters (e.g. the Alfa AWUS036ACM / MT7612U) work out of the box over their
+in-kernel mac80211 drivers — no DKMS. RTL8812AU adapters (AWUS036ACH/AC) still
+need an out-of-tree driver Kestrel deliberately omits and are not covered.
+
+### Added: device identification from captured SSIDs/BSSIDs
+A reduced port of the Augur project's device identifier
+(`kestrel_pi/device_id.py`): it turns a captured network's ESSID (and, when
+available, its BSSID vendor) into "what is this" — a router, a Ring doorbell, an
+HP printer, an Amazon device. Pure stdlib, offline. The loot store and the web
+Loot page show the result next to each network.
+
+### Added: on-device quick-crack (capture → crack → loot)
+A new, self-contained attack-and-crack capability (new to Kestrel; a port of the
+Augur crack→loot flow): the device cracks its own captured handshakes on the CPU
+and shows the recovered password in cleartext.
+
+- `builder/config.yml`: adds `hashcat`, `pocl-opencl-icd` and
+  `ocl-icd-libopencl1` (CPU OpenCL — the Pi has no usable cracking GPU); ships a
+  starter wordlist, the `[crack]` worker service, the wordlist boot-provisioner,
+  and the crack/wordlist directories.
+- `builder/extra/files/config.toml`: new `[crack]` table (ships `enabled =
+  true`, inert without a wordlist); nice/thermal/workload bounds so capture keeps
+  priority. One new table only; no other defaults touched.
+- `kestrel_pi/crack/` (new subpackage) + `kestrel-crack.service`: the worker
+  reads the capture store, runs `hashcat -m 22000` against the wordlists,
+  auto-cracks new handshakes (wordlist-first, "leave an AP alone" once it holds a
+  crackable hashline), and writes a pi-owned loot store. Local-only — no radio,
+  no network, no root.
+- CLI `kestrel crack …`, a daemon `/loot` web page (multi-select batch crack) and
+  a dashboard Loot card, plus a `crack` daemon readout service. See
+  `docs/developer/crack-interface.md` and the README "Wordlists" section.
+- Wordlists are operator-supplied: dropped into `/var/lib/kestrel/wordlists/` or
+  staged on the boot partition under `/boot/firmware/kestrel-wordlists/`.
+
+**Release impact: reflash-class** (adds apt packages and a new installed lib
+script / service), so it ships on a freshly flashed image, not an app-layer
+update.
+
 ### Left for later (deliberately not changed yet)
-These are features to decide on, not restrictions — kept at upstream defaults
-pending design discussion: the learning **agent** (`[agent]`), the **plugins**
-(e-ink face, session-stats, gps, and the network uploaders), and any capabilities
-ported from the Augur project. Tracked as the next step.
+Kept at upstream defaults pending design discussion: the learning **agent**
+(`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,
+wpa-sec, wigle, backup). Of the Augur ports under consideration, the device
+identifier and the quick-crack→loot flow are now in; the multi-screen touch deck
+(for the device's own HDMI screen) is the remaining one.

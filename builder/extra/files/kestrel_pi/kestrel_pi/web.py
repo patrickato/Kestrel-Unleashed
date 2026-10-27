@@ -41,6 +41,9 @@ from urllib.parse import quote, urlencode
 from . import config_catalog
 from .applyclient import APPLY_SOCKET, apply_change
 from .connectivity import MANAGEMENT_INTERFACES
+from .crack import CRACK_DEFAULTS, CRACK_DIR
+from .crack import store as crack_store
+from .crack import wordlists as crack_wordlists
 from .plugins import PluginPage, PluginRedirect
 
 log = logging.getLogger(__name__)
@@ -81,6 +84,10 @@ AGENT_POLICIES = ("baseline", "learned")
 # hardcoded like the enums above so web.py does not import the agent package. The
 # card is shown on the /agent page, not the dashboard widget grid.
 AGENT_CARD_NAME = "Learning agent"
+# The quick-crack readout card's widget-group key (kestrel_pi.crack.readout.
+# CARD_NAME), mirrored here like AGENT_CARD_NAME. The card is shown on the /loot
+# page, not the dashboard widget grid.
+CRACK_CARD_NAME = "Quick-crack"
 # One-line descriptions for the policy radio group on the /agent page.
 _AGENT_POLICY_DESC = {
     "baseline": "The scripted channel sweep. No trained model is used.",
@@ -582,6 +589,74 @@ def create_app(daemon):
     @app.get("/agent")
     def agent_page():  # noqa: ANN202
         return html(_render_agent(daemon.status(), control()))
+
+    @app.get("/loot")
+    def loot_page():  # noqa: ANN202
+        return html(_render_loot(daemon, control(),
+                                 message=request.args.get("err")
+                                 or request.args.get("msg"),
+                                 error=bool(request.args.get("err"))))
+
+    def _loot_redirect(ctl, message, err=False):
+        from flask import redirect
+        qs = ctl.get("qs") or ""
+        joiner = "&" if qs else "?"
+        return redirect("/loot" + qs + joiner
+                        + urlencode({"err" if err else "msg": message}), code=303)
+
+    @app.post("/loot")
+    def loot_submit():  # noqa: ANN202
+        # Queue a manual crack of the selected capture files against a wordlist.
+        # The daemon is pi and the crack queue is pi-owned, so this is a direct
+        # pi write -- no root apply socket. Still auth- and CSRF-gated like every
+        # control POST, and the selections are validated against the real file and
+        # wordlist sets so a crafted form can't enqueue a path outside the store.
+        ctl = control()
+        if not ctl["ready"]:
+            return html(_render_loot(daemon, ctl, message=CONTROLS_OFF,
+                                     error=True), 403)
+        if not _same(request.form.get("csrf") or "", csrf_token):
+            return _loot_redirect(ctl, "This page is out of date (the daemon "
+                                  "restarted); try again.", err=True)
+        cfg = daemon._fresh_config()
+        crack_cfg = cfg.get("crack") or {}
+        wdir = crack_cfg.get("wordlists_dir") or CRACK_DEFAULTS["wordlists_dir"]
+        order = crack_cfg.get("order") or "size"
+        valid_files = {os.path.basename(p): p
+                       for p in daemon.capture.hashline_files()}
+        lists = crack_wordlists.discover(wdir, order)
+        by_name = {w["name"]: w["path"] for w in lists}
+        picked = [valid_files[n] for n in request.form.getlist("file")
+                  if n in valid_files]
+        if not picked:
+            return _loot_redirect(ctl, "Select at least one capture file.",
+                                  err=True)
+        choice = request.form.get("wordlist") or "all"
+        if choice == "all":
+            targets = [w["path"] for w in lists]
+        elif choice in by_name:
+            targets = [by_name[choice]]
+        else:
+            targets = []
+        if not targets:
+            return _loot_redirect(ctl, "No wordlists available; add one first.",
+                                  err=True)
+        rules = []
+        rule_choice = request.form.get("rules") or ""
+        if rule_choice:
+            rpath = (rule_choice if os.path.isabs(rule_choice)
+                     else os.path.join(wdir, rule_choice))
+            if os.path.isfile(rpath):
+                rules = [rpath]
+        for wl in targets:
+            crack_store.enqueue_job(CRACK_DIR, picked, wl, rules=rules,
+                                    label="web")
+        msg = "Queued %d crack job(s) over %d file(s)." % (len(targets),
+                                                           len(picked))
+        if not bool(crack_cfg.get("enabled", True)):
+            msg += (" Note: quick-crack is off; run 'kestrel crack enable' to "
+                    "process the queue.")
+        return _loot_redirect(ctl, msg)
 
     @app.get("/settings")
     def settings_page():  # noqa: ANN202
@@ -1178,6 +1253,28 @@ _STATUS_CSS = (
     "font-size:.92rem;color:var(--muted);}"
     ".chk input{margin-top:.2em;}"
     "form.inline button{margin:0;padding:.35em .9em;font-size:.9rem;}"
+    # Kestrel-Unleashed loot/crack page: status pills, the multi-select capture
+    # file picker and the crack form row. The pill's word carries the status;
+    # colour only supplements it (never status by colour alone).
+    ".pill{display:inline-block;padding:.1em .6em;border-radius:6px;font-size:.78rem;"
+    "font-weight:600;border:1px solid var(--border);}"
+    ".pill.p-cracked{background:var(--on-bg);border-color:var(--on-bd);}"
+    ".pill.p-pending{background:var(--off-bg);}"
+    ".pill.p-exhausted{background:var(--err-bg);border-color:var(--err-bd);}"
+    ".picklist{max-height:16em;overflow:auto;border:1px solid var(--border);"
+    "border-radius:8px;padding:.4em .7em;margin:.4em 0;background:var(--card);}"
+    ".pick{display:block;font-weight:400;margin:.2em 0;}"
+    ".pick input{margin-right:.5em;}"
+    ".formrow{display:flex;flex-wrap:wrap;gap:.8em;align-items:flex-end;}"
+    ".formrow label{flex:1 1 12em;margin:0;}"
+    ".formrow button{margin:0;}"
+    ".lootguide{margin:.6em 0 1em;border:1px solid var(--border);border-radius:10px;"
+    "background:var(--card);box-shadow:var(--shadow);}"
+    ".lootguide>summary{cursor:pointer;padding:.75em 1em;font-weight:600;}"
+    ".lootguide>summary:hover,.lootguide>summary:focus{color:var(--link);}"
+    ".lootguide .wrap{margin:0 1em;}"
+    ".lootguide .hint{margin:.8em 1em 1em;}"
+    ".pill[title=recommended]{background:var(--on-bg);border-color:var(--on-bd);}"
     # The plugins-page config cell lays out Disable/settings on the left; the
     # per-plugin action buttons (Restore / Train, neutral blue) are grouped in
     # one box pushed to the far right, so they stay side by side and wrap below
@@ -2178,6 +2275,220 @@ def _render_agent(status, control=None, message=None, error=False):
     )
 
 
+_LOOT_BADGE = {"cracked": "CRACKED", "pending": "trying…", "exhausted": "exhausted"}
+
+
+def _loot_nav(crack, control):
+    """The dashboard's "Loot" nav card: a compact cracked/total summary linking
+    to the /loot page, where the full loot and the crack controls live."""
+    crack = crack or {}
+    st = crack.get("status") or {}
+    cracked = int(st.get("cracked") or 0)
+    total = int(st.get("targets") or 0)
+    if not crack.get("enabled", True):
+        summ = "Off"
+    elif total:
+        summ = "%d of %d cracked" % (cracked, total)
+        state = st.get("state")
+        if state == "cracking":
+            summ += " &middot; cracking…"
+        elif state == "paused-thermal":
+            summ += " &middot; paused (hot)"
+    else:
+        summ = "nothing captured yet"
+    return (
+        '<a class="navcard" href="' + _esc(_url("/loot", control)) + '">'
+        '<div class="scol"><span class="skey">Loot</span>'
+        '<span class="sval">' + summ + "</span>"
+        '<span class="smeta">Cracked passwords &amp; on-device cracking</span></div>'
+        '<span class="arrow" aria-hidden="true">&rarr;</span></a>'
+    )
+
+
+def _render_loot(daemon, control=None, message=None, error=False):
+    """The Loot page, reached from the dashboard's "Loot" nav card: the recovered
+    passwords (in cleartext) for every captured AP, the crack worker's live
+    readout, and (with web auth on) a form to queue a manual crack of selected
+    capture files against a chosen wordlist -- so files that didn't crack can be
+    re-run against another list or ruleset. Kept off the dashboard like the agent
+    page so it doesn't crowd the main view."""
+    status = daemon.status()
+    crack = status.get("crack") or {}
+    widgets = status.get("widgets") or {}
+    elements = widgets.get(CRACK_CARD_NAME)
+    aps = crack_store.LootStore(CRACK_DIR).load()
+
+    banner = ""
+    if message:
+        banner = ('<p class="msg' + (" err" if error else "") + '">'
+                  + _esc(message) + "</p>")
+
+    if elements:
+        readout = _render_widgets({CRACK_CARD_NAME: elements})
+    else:
+        readout = ('<p class="count">The crack worker has not reported yet. It '
+                   "cracks captured handshakes against your wordlists on the "
+                   "CPU; add a wordlist and capture a handshake to get going.</p>")
+
+    # The loot table: one row per AP, cracked first, password in cleartext.
+    rows_in = sorted(aps.values(), key=lambda r: (
+        r.get("status") != "cracked", (r.get("essid") or "").lower()))
+    trows = []
+    for r in rows_in:
+        st = r.get("status", "pending")
+        badge = ('<span class="pill p-' + st + '">'
+                 + _esc(_LOOT_BADGE.get(st, st)) + "</span>")
+        essid = r.get("essid") or ""
+        name = _esc(essid) if essid else '<span class="smeta">(hidden)</span>'
+        if st == "cracked":
+            pw = '<strong>' + _esc(r.get("password") or "") + "</strong>"
+        else:
+            pw = '<span class="smeta">—</span>'
+        trows.append(
+            '<tr><td data-label="status">' + badge + "</td>"
+            '<td data-label="network">' + name + "</td>"
+            '<td data-label="bssid">' + _esc(r.get("bssid") or "") + "</td>"
+            '<td data-label="device">' + _esc(r.get("device") or "") + "</td>"
+            '<td data-label="password">' + pw + "</td>"
+            '<td data-label="handshakes">' + _esc(r.get("hashlines", 0))
+            + "</td></tr>")
+    body_rows = "".join(trows) or (
+        "<tr><td colspan='6'>no loot yet (nothing captured or cracked)</td></tr>")
+    note = ('<p class="smeta">Passwords are shown in cleartext. '
+            + ("%d network(s)." % len(rows_in) if rows_in else "") + "</p>")
+    table = ("<h2>Loot</h2>" + note
+             + "<div class='wrap'><table><thead><tr><th>status</th>"
+             "<th>network</th><th>bssid</th><th>device</th><th>password</th>"
+             "<th>handshakes</th></tr></thead><tbody>" + body_rows
+             + "</tbody></table></div>")
+
+    form = _loot_crack_form(daemon, control)
+    guide = _loot_guide()
+    back = '<p><a href="' + _esc(_url("/", control)) + '">&larr; Dashboard</a></p>'
+    return _page(
+        "Loot - Kestrel",
+        back + "<h1>Loot</h1>" + banner + readout + table + guide + form,
+    )
+
+
+# The on-device wordlist/ruleset reference: every combination the operator can
+# run, fastest-first, with a rough per-network time on a Pi 5 CPU (~1,500
+# guesses/sec; each SSID is its own salted job) and a relative hit-rate. Static
+# content, so it is built once. "Odds" is qualitative on purpose: real WPA
+# success depends on the target, so a fake percentage would mislead.
+# (combo, ~guesses per network, est. time per network, odds, best-for, recommended?)
+_CRACK_COMBOS = (
+    ("starter.txt + wpa-top.txt (shipped)", "~500", "instant", "Low",
+     "the automatic first pass", False),
+    ("probable-v2-wpa-top4800", "~4.8k", "~3 sec", "Low–Med",
+     "best tiny WPA list — drop it in", True),
+    ("top-100000", "~100k", "~1 min", "Med",
+     "broad quick sweep", False),
+    ("probable-v2-wpa-top4800 + best64.rule", "~0.3M", "~3–4 min", "Med",
+     "quick deep pass — the sweet spot", True),
+    ("top-100000 + best64.rule", "~6.4M", "~1–1.5 hr", "Med–High",
+     "thorough daytime run", False),
+    ("rockyou.txt (8+ filtered)", "~9.6M", "~1.5–3 hr", "Med–High",
+     "the overnight workhorse", True),
+    ("top-1000000 + best64.rule", "~64M", "~8–16 hr", "High",
+     "deep overnight dig", False),
+    ("rockyou + best64, or any + rockyou-30000", "100M–billions", "days+",
+     "High*", "*GPU/desktop only — too slow on the Pi", False),
+)
+
+
+def _loot_guide():
+    """A collapsed reference of wordlist/ruleset combinations, their rough speed
+    on this hardware and their relative odds, so the operator can see and choose
+    every option. Native <details>, no JS."""
+    rows = []
+    for combo, guesses, when, odds, best, rec in _CRACK_COMBOS:
+        star = ('<span class="pill p-cracked" title="recommended">★</span> '
+                if rec else "")
+        name = ("<strong>" + _esc(combo) + "</strong>") if rec else _esc(combo)
+        rows.append(
+            '<tr><td data-label="combination">' + star + name + "</td>"
+            '<td data-label="guesses/net">' + _esc(guesses) + "</td>"
+            '<td data-label="time/net">' + _esc(when) + "</td>"
+            '<td data-label="odds">' + _esc(odds) + "</td>"
+            '<td data-label="best for">' + _esc(best) + "</td></tr>")
+    table = ("<div class='wrap'><table><thead><tr><th>combination</th>"
+             "<th>guesses/net</th><th>est. time/net</th><th>odds</th>"
+             "<th>best for</th></tr></thead><tbody>" + "".join(rows)
+             + "</tbody></table></div>")
+    rec = ('<p class="hint"><strong>★ My recommended ladder:</strong> let it '
+           "auto-run the small lists, add <code>probable-v2-wpa-top4800</code> "
+           "and filtered <code>rockyou.txt</code> (drop them in the wordlists "
+           "folder), deep-pass stragglers with <code>probable-v2-wpa-top4800 + "
+           "best64.rule</code> from the form below, and let <code>rockyou</code> "
+           "grind overnight. Times assume a Pi 5 CPU (~1,500 guesses/sec) per "
+           "network; odds are a rough relative guide, not a guarantee. Full "
+           "detail: the on-device guide (<code>/guide</code>) and "
+           "docs/user-guide/wordlist-recommendations.md.</p>")
+    return ('<details class="lootguide"><summary>Which wordlist + rule should I '
+            "use? (speed vs. odds)</summary>" + table + rec + "</details>")
+
+
+def _loot_crack_form(daemon, control):
+    """The "Crack more" form on the /loot page: multi-select capture files, a
+    wordlist and optional ruleset, queued as a manual crack. Only when web auth
+    is on (a control POST); read-only otherwise."""
+    if control is None or not control.get("ready"):
+        return ('<h2>Crack more</h2><p class="hint">Turn web controls on to '
+                "queue a crack from here (they use the device login): "
+                "<code>sudo kestrel web auth system</code>. You can always "
+                "queue one over SSH with <code>kestrel crack run</code>.</p>")
+    cfg = daemon._fresh_config()
+    crack_cfg = cfg.get("crack") or {}
+    wdir = crack_cfg.get("wordlists_dir") or CRACK_DEFAULTS["wordlists_dir"]
+    order = crack_cfg.get("order") or "size"
+    lists = crack_wordlists.discover(wdir, order)
+    files = [os.path.basename(p) for p in daemon.capture.hashline_files()]
+    if not files:
+        return ('<h2>Crack more</h2><p class="count">No capture files yet — '
+                "nothing to crack.</p>")
+    checks = []
+    for name in files:
+        checks.append(
+            '<label class="pick"><input type="checkbox" name="file" value="'
+            + _esc(name) + '"> ' + _esc(name) + "</label>")
+    file_box = ('<div class="picklist">' + "".join(checks) + "</div>")
+
+    opts = ['<option value="all">All wordlists (smallest first)</option>']
+    for w in lists:
+        opts.append('<option value="' + _esc(w["name"]) + '">'
+                    + _esc(w["name"]) + " (%.0f KB)" % (w["size"] / 1024.0)
+                    + "</option>")
+    wl_select = ('<label>Wordlist <select name="wordlist">' + "".join(opts)
+                 + "</select></label>")
+
+    rule_files = []
+    try:
+        for n in sorted(os.listdir(wdir)):
+            if n.endswith(".rule") and os.path.isfile(os.path.join(wdir, n)):
+                rule_files.append(n)
+    except OSError:
+        pass
+    rule_html = ""
+    if rule_files:
+        ropts = ['<option value="">No rules (fast)</option>']
+        for n in rule_files:
+            ropts.append('<option value="' + _esc(n) + '">' + _esc(n)
+                         + "</option>")
+        rule_html = ('<label>Rules <select name="rules">' + "".join(ropts)
+                     + "</select></label>")
+
+    hint = ('<p class="hint">Tick the capture files to crack, pick a wordlist '
+            "(or All), and queue it. Great for throwing a bigger list or a "
+            "ruleset at whatever hasn't cracked yet.</p>")
+    return (
+        "<h2>Crack more</h2>" + hint
+        + '<form method="post" action="' + _esc(_url("/loot", control)) + '">'
+        + _csrf_field(control) + file_box
+        + '<div class="formrow">' + wl_select + rule_html
+        + '<button type="submit">Crack selected</button></div></form>')
+
+
 def _render_addresses(addresses):
     """A light, native ``<details>`` disclosure of the management-link addresses
     (the IPs the dashboard is reachable at). ``addresses`` is a list of
@@ -2384,10 +2695,11 @@ def _render_status(status, control=None, message=None, error=False, addresses=No
     if message:
         banner = ('<p class="msg' + (" err" if error else "")
                   + '">' + _esc(message) + "</p>")
-    # The agent's own readout card lives on the /agent page now, not the
-    # dashboard grid, so drop it here (it is still in status["widgets"]).
+    # The agent's and the crack worker's own readout cards live on their own
+    # pages (/agent, /loot), not the dashboard grid, so drop them here (they are
+    # still in status["widgets"]).
     dash_widgets = {k: v for k, v in (status.get("widgets") or {}).items()
-                    if k != AGENT_CARD_NAME}
+                    if k not in (AGENT_CARD_NAME, CRACK_CARD_NAME)}
     widgets_html = _render_widgets(dash_widgets, plugins=plugins,
                                    plugins_url=_url("/plugins", control))
 
@@ -2410,6 +2722,7 @@ def _render_status(status, control=None, message=None, error=False, addresses=No
         + ' AP(s)</span>'
         '<span class="smeta">Browse by network or access point</span></div>'
         '<span class="arrow" aria-hidden="true">&rarr;</span></a>'
+        + _loot_nav(status.get("crack"), control)
         + _whitelist_nav(cap, control)
     )
 

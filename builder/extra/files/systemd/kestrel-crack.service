@@ -1,0 +1,35 @@
+[Unit]
+Description=kestrel on-device quick-crack worker (Kestrel-Unleashed; local-only)
+# Cracks the captured .hc22000 store on the CPU. It only reads data already
+# captured, so it needs neither the radio nor the network; it starts after
+# capture merely so a fresh boot populates the store first, and re-reads
+# [crack] enabled itself each pass (a stale enable just idles).
+After=kestrel-capture.service
+Wants=kestrel-capture.service
+
+[Service]
+# Runs as pi: hashcat is a user-space cracker, the wordlists and the loot store
+# are pi-owned, and it never needs root, the radio or the network.
+User=pi
+Group=pi
+NoNewPrivileges=yes
+# The worker self-gates on [crack] enabled (idles when off), so it stays up and
+# a config flip from the CLI/web takes effect with no restart; a real crash is
+# restarted.
+ExecStart=/home/pi/.venv/bin/kestrel-crack --config /etc/kestrel/config.toml
+Restart=on-failure
+RestartSec=10
+
+# Resource guardrails: cracking is a background sipper, never the priority. Nice
+# keeps the whole service (and its niced hashcat child) below capture, the
+# daemon and the agent under contention; CPUWeight gives those the cores when
+# they want them. hashcat on the Pi's CPU (via pocl) uses little RAM, so a
+# modest cap just stops a runaway. The worker is also thermal-gated in code
+# ([crack] max_temp_c), so the board never cooks while fast-cracking.
+Nice=15
+CPUWeight=20
+MemoryHigh=1200M
+MemoryMax=1500M
+
+[Install]
+WantedBy=multi-user.target

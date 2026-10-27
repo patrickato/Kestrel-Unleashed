@@ -153,7 +153,8 @@ def test_plugins_ctl_set_uses_table_scoped_writer(config):
     assert result.returncode == 0, result.stderr
     flags = _enabled_flags(_read(config))
     assert flags["plugins.wpa-sec"] is True
-    assert flags["plugins.wigle"] is False and flags["capture"] is False
+    # wigle stays off and capture is untouched (Kestrel-Unleashed ships it on).
+    assert flags["plugins.wigle"] is False and flags["capture"] is True
 
 
 # -- array mode (--add-str / --del-str), used by the capture whitelist --------

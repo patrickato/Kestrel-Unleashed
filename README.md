@@ -18,6 +18,7 @@ Kestrel is a small, battery-powered companion that sits nearby, listens to the W
 
 - **Modern, reproducible base.** A current 64-bit Raspberry Pi OS (bookworm, Python 3.11), produced by a scripted Packer + Ansible build rather than a hand-maintained card, so the whole image is easy to rebuild, audit and extend.
 - **AngryOxide capture engine.** Capture runs on [AngryOxide](https://git.3ntropy.io/aluminum-ice/AngryOxide) over in-kernel `nl80211`/mac80211 drivers — no out-of-tree drivers or DKMS — on a dedicated USB adapter, so the built-in Wi-Fi and Bluetooth stay free for management.
+- **On-device quick-crack.** A niced, thermal-gated background worker cracks captured handshakes on the Pi itself with `hashcat -m 22000` against your wordlists (drop-in, auto-detected), and shows the recovered password in cleartext on the web Loot page and the CLI. Local-only — it reads data you already captured, never the radio or network. (See [On-device quick-crack](#on-device-quick-crack-kestrel-unleashed).)
 - **Reworked plugin host.** A small daemon hosts features as plugins. The `Plugin` base class and `on_*` hooks stay source-compatible with the pwnagotchi plugin API, with non-blocking off-loop dispatch, typed plugin context, capability and permission declarations, dependency ordering, hook-API versioning, and config validation with health reporting added on top.
 - **Mobile-first web dashboard.** A responsive, dark-mode-aware dashboard and control surface — server-rendered and dependency-free — shows live status and per-plugin readouts and drives capture, plugins and power from a phone. (See [Web interface](#web-interface).)
 - **Trainable learning agent.** An optional reinforcement-learning policy (stable-baselines3 / RecurrentPPO) picks the scan posture each decision window, with offline training, on-device fine-tuning, model import and remote training over SSH; it always falls back to a scripted sweep.
@@ -59,6 +60,7 @@ The panel shows a top icon strip (Bluetooth PAN and Wi-Fi link, a GPS satellite 
 ### Software
 
 - **[AngryOxide](https://git.3ntropy.io/aluminum-ice/AngryOxide) v0.9.3** at `/usr/bin/angryoxide`, with bash completion. The statically linked `aarch64-musl` release build runs on every supported board. AngryOxide captures only on an external USB WiFi adapter, not the built-in chip (see WiFi capture adapter below).
+- **[hashcat](https://hashcat.net/hashcat/)** (with `pocl-opencl-icd` for a CPU OpenCL device) for the on-device quick-crack of captured handshakes, plus `hcxtools` for hashline conversion. CPU-only on the Pi (no usable cracking GPU).
 - **No kernel headers or DKMS**: capture uses in-kernel drivers only, and Python packages install from prebuilt arm64 wheels, so the build compiles nothing. (Stock Raspberry Pi OS Lite itself ships `build-essential`.)
 - **CLI utilities**: `git`, `screen` (the [screenrc](https://github.com/aluminum-ice/screenrc) config is temporarily not installed), `lnav`, `p7zip-full` (7z), `ncdu`, `lsof`, `rsync`, `sqlite3`, `unzip`, `cifs-utils`, `openvpn`, `fonts-firacode`.
 
@@ -181,6 +183,35 @@ By default capture does a **scripted channel sweep**: it rotates through every c
 **Whitelist from the boot partition.** Like Wi-Fi credentials, the whitelist can be staged before first boot: put a plain text file named `kestrel-whitelist.txt` on the boot partition (`/boot/firmware` on the device), one SSID or MAC per line (`#` comments and blank lines ignored). On boot the entries are merged into `[capture] whitelist` and the file is removed, so you can prepare a card for the field without SSHing in. `config.toml` stays the lasting source of truth afterward.
 
 Captures land in `/var/lib/kestrel/capture/` — one `.hc22000` file per SSID by default, or one combined file (`[capture.output] mode`). The store is **append-only**: handshakes accumulate across reboots and restarts and are never overwritten. Manage its size with `kestrel capture archive` (move captures aside, start fresh), `capture clear --yes` (delete), or the opt-in `[capture.housekeeping]` policy; the store itself is never deleted automatically. What *is* bounded automatically is AngryOxide's raw working dir (`.run/`): its `.pcapng` and kismet DB grow for the whole session and would otherwise fill the card, so `[capture.housekeeping] max_run_mb` (default 512) rolls the capture when that dir gets too big, deleting the raw files while keeping every extracted hashline. Set it to `0` to keep full packet captures.
+
+## On-device quick-crack (Kestrel-Unleashed)
+
+Kestrel-Unleashed cracks the captured handshakes **on the Pi itself**, so a recovered password shows up right on the device — no desktop round-trip. A background worker (`kestrel-crack.service`) reads the `.hc22000` store, runs `hashcat -m 22000` against your wordlists on the CPU, and writes any recovered passphrase — in **cleartext** — to a loot store shown on the web **Loot** page and by `kestrel crack`. It is **local-only** (no radio, no network, no root — it only reads data you already captured), and **CPU-only by design**: the Pi has no usable cracking GPU, so the run is niced and thermal-gated (`[crack] max_temp_c`, default 75 °C) and capture always keeps priority. It ships **enabled** and auto-cracks new handshakes, but is inert until a wordlist is present; `sudo kestrel crack disable` turns it off. See [`docs/developer/crack-interface.md`](docs/developer/crack-interface.md).
+
+Because an AP's PSK is network-wide, one crackable handshake is all it needs; once an AP has one, capture leaves it alone and the cracker keeps that hashline queued until it cracks or every wordlist is exhausted — and a newly added wordlist automatically re-arms the exhausted ones.
+
+```bash
+kestrel crack status                    # worker state + cracked/total summary
+kestrel crack list                      # loot: recovered passwords in cleartext
+kestrel crack show HomeWiFi             # full loot for one network (ESSID or BSSID)
+kestrel crack wordlists                 # the wordlists on the device, in the order tried
+kestrel crack run HomeWiFi.hc22000 --wordlist rockyou.txt   # re-run one capture against a bigger list
+kestrel crack run NetA.hc22000 NetB.hc22000                 # multiple files; --wordlist omitted = all lists
+```
+
+The web **Loot** page (dashboard → *Loot*, with `[web] auth` on) shows the same loot and lets you tick several capture files and queue them against a chosen wordlist or ruleset — the easy way to throw a bigger list at whatever hasn't cracked yet, from a phone or the device's own screen.
+
+### Wordlists — how and where to add your own
+
+Cracking only does something once a wordlist is present. Two curated lists ship so it works out of the box (`starter.txt`, and a larger WPA-focused `wpa-top.txt`); add your own (e.g. `rockyou.txt`, or the SecLists WiFi-WPA lists) one of two ways:
+
+- **Over SSH:** copy files straight into the wordlists dir —
+  ```bash
+  scp rockyou.txt pi@<device>:/var/lib/kestrel/wordlists/
+  ```
+- **Before first boot (no SSH):** make a folder named `kestrel-wordlists` on the **boot partition** (`/boot/firmware` on the device, the small FAT partition your PC sees when you plug in the card) and drop your wordlist files in it. On boot they are moved into `/var/lib/kestrel/wordlists/` automatically and the staged folder is cleared.
+
+Every readable file in the wordlists dir is picked up automatically — no config edit needed. They are tried **smallest-first** by default (`[crack] order = "size"`), so quick lists land the easy passwords in minutes and a big list like rockyou grinds in the background as the last resort. On a Pi, prefer a small **WPA-specific** list first (SecLists `Passwords/WiFi-WPA/…`) and keep rockyou as the overnight pass; cracking WPA2 on a CPU is slow (~1–2k guesses/sec), so smallest-first matters. Hashcat **rule** files are already on the device (`/usr/share/hashcat/rules/`): select one by bare name with `[crack] rules` (e.g. `rules = ["best64.rule"]`) for a deeper retry on a small list. **Which lists and rules to use, ranked for this hardware, is in [`docs/user-guide/wordlist-recommendations.md`](docs/user-guide/wordlist-recommendations.md).**
 
 ## Plugins
 

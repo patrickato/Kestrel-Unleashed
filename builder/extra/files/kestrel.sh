@@ -57,6 +57,16 @@ Usage: $PROG <command>
   capture archive    Archive the capture store and start fresh
   capture rotate     Apply the housekeeping policy now (used by the timer)
   capture clear --yes [--purge]   Delete the live store (and archives with --purge)
+  crack              Quick-crack menu (on-device cracking of captured handshakes)
+  crack status       Show the worker state and loot summary
+  crack list [FILTER]   List loot (recovered passwords in cleartext)
+  crack show Q       Full loot for the network(s) matching an ESSID or BSSID
+  crack wordlists    List the wordlists on the device (in the order tried)
+  crack run FILE... [--wordlist NAME|all] [--rules NAME]...   Queue a manual
+                     crack of one or more capture files (re-run what didn't crack
+                     against another wordlist/ruleset); omit --wordlist for all
+  crack enable       Enable quick-crack (auto-crack new handshakes); disable to stop
+  crack clear --yes  Clear the loot store (captures and wordlists untouched)
   plugins            Plugin menu (list, info, enable, disable)
   plugins list       List plugins and whether each is enabled
   plugins info NAME  Show a plugin's capabilities, options, deps and health
@@ -1573,6 +1583,253 @@ cmd_agent() {
     esac
 }
 
+## crack (Kestrel-Unleashed on-device quick-crack) #########################
+# Read/drive the crack worker and show the loot (recovered passwords, in
+# cleartext). Read-only commands use the system python3 -I on the world-readable
+# loot/status JSON; wordlist discovery and job enqueue go through the pi venv
+# (kestrel_pi.crack), as pi, so queue files are pi-owned like the worker.
+
+cmd_crack_status() {
+    local status="$PWN_CRACK_DIR/status.json" wd
+    wd=$(cfg crack.wordlists_dir "$PWN_WORDLISTS_DIR")
+    echo "Quick-crack:"
+    echo "  config: enabled=$(cfg crack.enabled true) order=$(cfg crack.order size) workload=$(cfg crack.workload 1) nice=$(cfg crack.nice 15)"
+    echo "          max_temp_c=$(cfg crack.max_temp_c 75) wordlists_dir=$wd"
+    if systemctl is-active --quiet "$PWN_CRACK_SERVICE"; then
+        echo "  service: running"
+    else
+        echo "  service: stopped"
+    fi
+    if [ -d "$wd" ]; then
+        echo "  wordlists: $(find "$wd" -maxdepth 1 -type f ! -name '*.rule' | wc -l) list(s), $(find "$wd" -maxdepth 1 -type f -name '*.rule' | wc -l) rule(s)"
+    else
+        echo "  wordlists: none ($wd missing)"
+    fi
+    if [ -f "$status" ]; then
+        PWN_STATUS="$status" python3 -I - <<'PY' 2>/dev/null || true
+import json, os
+s = json.load(open(os.environ["PWN_STATUS"]))
+print("  state: %s" % s.get("state", "?"))
+print("  cracked: %d / %d   still trying: %d   exhausted: %d" % (
+    s.get("cracked", 0), s.get("targets", 0), s.get("pending", 0), s.get("exhausted", 0)))
+t = s.get("temp_c")
+if t is not None:
+    print("  cpu temp: %.0f C" % t)
+if s.get("queue"):
+    print("  queued manual jobs: %d" % s["queue"])
+cur = s.get("current") or {}
+if cur:
+    print("  now cracking: %s via %s" % (cur.get("essid") or cur.get("bssid") or "?", cur.get("wordlist", "")))
+lc = s.get("last_crack") or {}
+if lc:
+    print("  last cracked: %s" % (lc.get("essid") or lc.get("bssid") or "?"))
+PY
+    else
+        echo "  (worker has not run yet)"
+    fi
+}
+
+cmd_crack_list() {
+    local loot="$PWN_CRACK_DIR/loot.json" filter="${1:-}"
+    [ -f "$loot" ] || { echo "no loot yet (nothing captured or cracked)"; return 0; }
+    PWN_LOOT="$loot" PWN_FILTER="$filter" python3 -I - <<'PY'
+import json, os
+d = json.load(open(os.environ["PWN_LOOT"]))
+aps = d.get("aps", {})
+flt = os.environ.get("PWN_FILTER", "").lower()
+rows = []
+for bssid, r in aps.items():
+    hay = (r.get("essid", "") + " " + bssid + " " + r.get("device", "")).lower()
+    if flt and flt not in hay:
+        continue
+    rows.append(r)
+rows.sort(key=lambda r: (r.get("status") != "cracked", (r.get("essid") or "").lower()))
+if not rows:
+    print("no matching loot"); raise SystemExit(0)
+mark = {"cracked": "[CRACKED]", "pending": "[trying] ", "exhausted": "[exhaust]"}
+for r in rows:
+    st = r.get("status", "pending")
+    line = "%s %-28s %s" % (mark.get(st, "[%s]" % st), (r.get("essid") or "(hidden)")[:28], r.get("bssid", ""))
+    if r.get("device"):
+        line += "  (%s)" % r["device"]
+    print(line)
+    if st == "cracked":
+        print("          password: %s   [wordlist: %s]" % (r.get("password", ""), r.get("cracked_wordlist", "")))
+print()
+print("%d network(s); passwords shown in cleartext." % len(rows))
+PY
+}
+
+cmd_crack_show() {
+    [ $# -ge 1 ] || die "usage: $PROG crack show <essid-or-bssid>"
+    local loot="$PWN_CRACK_DIR/loot.json"
+    [ -f "$loot" ] || { echo "no loot yet"; return 0; }
+    PWN_LOOT="$loot" PWN_Q="$1" python3 -I - <<'PY'
+import json, os
+d = json.load(open(os.environ["PWN_LOOT"]))
+q = os.environ["PWN_Q"].lower()
+hits = [r for b, r in d.get("aps", {}).items()
+        if q in (r.get("essid", "") + " " + b + " " + r.get("device", "")).lower()]
+if not hits:
+    print("no match for %r" % os.environ["PWN_Q"]); raise SystemExit(0)
+for r in hits:
+    print("ESSID:      %s" % (r.get("essid") or "(hidden)"))
+    print("BSSID/MAC:  %s" % r.get("bssid", ""))
+    print("device:     %s" % (r.get("device") or "unknown"))
+    print("type:       %s" % r.get("type", "?"))
+    print("status:     %s" % r.get("status", "pending"))
+    if r.get("status") == "cracked":
+        print("PASSWORD:   %s" % r.get("password", ""))
+        print("wordlist:   %s" % r.get("cracked_wordlist", ""))
+    print("handshakes: %d   files: %s" % (r.get("hashlines", 0), ", ".join(r.get("files", []))))
+    tried = r.get("tried", [])
+    if tried:
+        print("tried:      %s" % ", ".join(t.split(":")[0] for t in tried))
+    print()
+PY
+}
+
+cmd_crack_wordlists() {
+    local wd order
+    wd=$(cfg crack.wordlists_dir "$PWN_WORDLISTS_DIR")
+    order=$(cfg crack.order size)
+    echo "Wordlists in $wd (tried in order: $order):"
+    if ! run_as_pi "$PWN_VENV_PYTHON" -I -c '
+import sys
+from kestrel_pi.crack import wordlists
+ls = wordlists.discover(sys.argv[1], sys.argv[2])
+if not ls:
+    print("  (none - drop a list here, or stage on the boot partition)")
+for w in ls:
+    print("  %-30s %8.1f KB" % (w["name"], w["size"] / 1024.0))
+' "$wd" "$order" 2>/dev/null; then
+        find "$wd" -maxdepth 1 -type f ! -name '*.rule' -printf '  %f\n' 2>/dev/null || echo "  (none)"
+    fi
+}
+
+cmd_crack_run() {
+    local wordlist="" wd f r w
+    local files=() rules=() resolved=() rpaths=() wls=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --wordlist|-w) wordlist=$2; shift 2 ;;
+            --rules|-r) rules+=("$2"); shift 2 ;;
+            --*) die "unknown option for 'crack run': $1" ;;
+            *) files+=("$1"); shift ;;
+        esac
+    done
+    [ "${#files[@]}" -gt 0 ] || die "usage: $PROG crack run <file.hc22000>... [--wordlist NAME|all] [--rules NAME]..."
+    wd=$(cfg crack.wordlists_dir "$PWN_WORDLISTS_DIR")
+    # Resolve the capture files (a bare name is looked up in the store).
+    for f in "${files[@]}"; do
+        if [ -f "$f" ]; then resolved+=("$(readlink -f "$f")")
+        elif [ -f "$PWN_CAPTURE_DIR/$f" ]; then resolved+=("$PWN_CAPTURE_DIR/$f")
+        else die "no such capture file: $f (looked in . and $PWN_CAPTURE_DIR)"; fi
+    done
+    # One named wordlist, or every available list (smallest-first).
+    if [ -n "$wordlist" ] && [ "$wordlist" != all ]; then
+        if [ -f "$wordlist" ]; then wls+=("$(readlink -f "$wordlist")")
+        elif [ -f "$wd/$wordlist" ]; then wls+=("$wd/$wordlist")
+        else die "no such wordlist: $wordlist (looked in . and $wd)"; fi
+    else
+        while IFS= read -r w; do [ -n "$w" ] && wls+=("$w"); done < <(
+            run_as_pi "$PWN_VENV_PYTHON" -I -c '
+import sys
+from kestrel_pi.crack import wordlists
+for x in wordlists.discover(sys.argv[1], "size"):
+    print(x["path"])
+' "$wd" 2>/dev/null)
+        [ "${#wls[@]}" -gt 0 ] || die "no wordlists in $wd (add one: see $PROG crack wordlists)"
+    fi
+    # Resolve rule files (a bare name is looked up in wordlists_dir).
+    for r in "${rules[@]:-}"; do
+        [ -n "$r" ] || continue
+        if [ -f "$r" ]; then rpaths+=("$(readlink -f "$r")")
+        elif [ -f "$wd/$r" ]; then rpaths+=("$wd/$r")
+        else die "no such rule file: $r"; fi
+    done
+    # Enqueue one job per wordlist, as pi (the worker owns the queue files).
+    for w in "${wls[@]}"; do
+        run_as_pi "$PWN_VENV_PYTHON" -I -c '
+import sys
+from kestrel_pi.crack import store
+crack_dir, wl, nf = sys.argv[1], sys.argv[2], int(sys.argv[3])
+files = sys.argv[4:4 + nf]
+rules = sys.argv[4 + nf:]
+store.enqueue_job(crack_dir, files, wl, rules=rules, label="manual")
+' "$PWN_CRACK_DIR" "$w" "${#resolved[@]}" "${resolved[@]}" "${rpaths[@]:-}"
+    done
+    log "queued ${#wls[@]} crack job(s) over ${#resolved[@]} file(s); the worker processes them in order"
+    [ "$(cfg crack.enabled true)" = true ] || log "note: quick-crack is disabled; run 'sudo $PROG crack enable' to process the queue"
+}
+
+cmd_crack_enable() {
+    need_root
+    config_set crack enabled true
+    systemctl enable "$PWN_CRACK_SERVICE"
+    systemctl start --no-block "$PWN_CRACK_SERVICE"
+    log "quick-crack enabled; the worker cracks captured handshakes against your wordlists"
+}
+
+cmd_crack_disable() {
+    need_root
+    config_set crack enabled false
+    systemctl disable --now --no-block "$PWN_CRACK_SERVICE" 2>/dev/null || true
+    log "quick-crack disabled (captures and wordlists untouched)"
+}
+
+cmd_crack_clear() {
+    if [ "${1:-}" != "--yes" ]; then
+        if have_whiptail; then
+            whiptail --yesno "Clear the loot store (recovered passwords + crack progress)?\nCaptures and wordlists are left untouched." 10 70 || return 0
+        else
+            die "this deletes recovered passwords; re-run: $PROG crack clear --yes"
+        fi
+    fi
+    rm -f "$PWN_CRACK_DIR/loot.json"
+    log "loot store cleared (captures and wordlists are untouched)"
+}
+
+cmd_crack_menu() {
+    have_whiptail || { cmd_crack_status; return 0; }
+    while true; do
+        local choice
+        choice=$(whiptail --title "kestrel crack" --menu "On-device quick-crack" 18 72 7 \
+            status "Show the worker state and loot summary" \
+            list "List loot (recovered passwords, cleartext)" \
+            wordlists "List the wordlists on the device" \
+            enable "Enable quick-crack" \
+            disable "Disable quick-crack" \
+            clear "Clear the loot store" \
+            quit "Back" 3>&1 1>&2 2>&3) || return 0
+        case "$choice" in
+            status) run_box "Crack status" 22 78 cmd_crack_status ;;
+            list) run_box "Loot" 24 80 cmd_crack_list ;;
+            wordlists) run_box "Wordlists" 20 78 cmd_crack_wordlists ;;
+            enable) run_box "Enable crack" 12 70 cmd_crack_enable ;;
+            disable) run_box "Disable crack" 12 70 cmd_crack_disable ;;
+            clear) cmd_crack_clear ;;
+            quit) return 0 ;;
+        esac
+    done
+}
+
+cmd_crack() {
+    [ $# -gt 0 ] || { cmd_crack_menu; return; }
+    local sub=$1; shift
+    case "$sub" in
+        status) cmd_crack_status ;;
+        list|loot) cmd_crack_list "$@" ;;
+        show) cmd_crack_show "$@" ;;
+        wordlists|lists) cmd_crack_wordlists ;;
+        run) cmd_crack_run "$@" ;;
+        enable) cmd_crack_enable ;;
+        disable) cmd_crack_disable ;;
+        clear) cmd_crack_clear "$@" ;;
+        *) die "unknown 'crack' subcommand: $sub (status|list|show|wordlists|run|enable|disable|clear)" ;;
+    esac
+}
+
 ## remote-train (offload agent training to a desktop host) #################
 # The `remote-train` plugin trains the learning agent on a more powerful Linux
 # host over SSH, using the pi account's key (reused from backup by default, just
@@ -2053,6 +2310,7 @@ cmd_setup() {
         choice=$(whiptail --title "kestrel setup" --menu "What would you like to set up?" 19 66 8 \
             network "Connectivity (Wi-Fi station, Bluetooth)" \
             capture "WiFi capture (AngryOxide)" \
+            crack "On-device quick-crack (hashcat)" \
             plugins "Plugins (enable/disable features)" \
             web "Web page (login, plugin controls)" \
             backup "Remote backup of capture data" \
@@ -2063,6 +2321,7 @@ cmd_setup() {
         case "$choice" in
             network) cmd_network_menu ;;
             capture) cmd_capture_menu ;;
+            crack) cmd_crack_menu ;;
             plugins) cmd_plugins_menu ;;
             web) cmd_web_menu ;;
             backup) cmd_backup_menu ;;
@@ -2081,6 +2340,7 @@ main() {
         setup) cmd_setup "$@" ;;
         network) cmd_network "$@" ;;
         capture) cmd_capture "$@" ;;
+        crack) cmd_crack "$@" ;;
         plugins) cmd_plugins "$@" ;;
         web) cmd_web "$@" ;;
         backup) cmd_backup "$@" ;;

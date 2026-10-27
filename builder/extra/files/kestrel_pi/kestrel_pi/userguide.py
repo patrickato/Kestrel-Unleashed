@@ -268,6 +268,43 @@ It shows whether capture is enabled and running, the resolved dongle and driver,
 
 ---
 
+## On-device quick-crack
+
+Kestrel-Unleashed cracks the handshakes it captures right on the device, so a recovered password appears on the dashboard and in the terminal with no desktop round-trip. A background worker runs `hashcat` against your wordlists on the CPU. It is local-only — it reads handshakes you already captured and never touches the radio or the network — and it is niced and thermal-gated so capturing always keeps priority and the Pi never overheats while cracking. It ships **on** and cracks new handshakes automatically, but does nothing until a wordlist is present.
+
+### Adding wordlists
+
+Cracking needs a wordlist. Two curated lists are included so it works out of the box (`starter.txt` and a larger WPA-focused `wpa-top.txt`); add your own (for example `rockyou.txt`, or the SecLists WiFi-WPA lists) in either of two ways:
+
+- **Over SSH**, copy files into the wordlists folder:
+
+  ```bash
+  scp rockyou.txt pi@<device>:/var/lib/kestrel/wordlists/
+  ```
+
+- **Before first boot, with no SSH**: on the card's boot partition (the small FAT partition your PC sees when you plug the card in), make a folder named `kestrel-wordlists` and drop your wordlist files in it. On the next boot they are moved into `/var/lib/kestrel/wordlists/` for you and the staged folder is cleared.
+
+Every readable file in the wordlists folder is used automatically — no config to edit. They are tried **smallest first**, so quick lists catch easy passwords in minutes and a big list like rockyou grinds in the background as the last resort. On a Pi, cracking WPA2 is CPU-slow (~1–2k guesses a second), so a small WPA-focused list first, with rockyou as the overnight pass, works best. Hashcat rule files are already on the device: turn one on with `[crack] rules = ["best64.rule"]` in `config.toml` for a deeper retry on a small list. For which lists and rules to use, ranked for this hardware, see `docs/user-guide/wordlist-recommendations.md` in the project.
+
+### Seeing and driving it
+
+The dashboard's **Loot** card (→ *Loot* page) lists every captured network, its device type and BSSID, and — for the ones it cracked — the password in cleartext. With the dashboard login on, the same page lets you tick one or more capture files and queue them against a chosen wordlist or ruleset: the easy way to throw a bigger list at whatever has not cracked yet, from your phone or the device's own screen.
+
+From the terminal:
+
+```bash
+kestrel crack status                 # worker state and a cracked/total summary
+kestrel crack list                   # the loot: recovered passwords, in cleartext
+kestrel crack show HomeWiFi          # everything known about one network
+kestrel crack wordlists              # the wordlists on the device, in the order tried
+kestrel crack run HomeWiFi.hc22000 --wordlist rockyou.txt   # re-run one capture against a bigger list
+sudo kestrel crack disable           # turn auto-cracking off (and enable to turn back on)
+```
+
+Once a network yields a crackable handshake, capturing leaves it alone (one is enough — the password is the whole network's), and the cracker keeps that handshake until it cracks or every wordlist is exhausted. Add a new, bigger wordlist later and it automatically gets a fresh pass at everything still uncracked.
+
+---
+
 ## Plugins
 
 A small daemon (`kestrel-daemon`) hosts plugins and serves the dashboard. The daemon ships enabled but does nothing on its own until you enable a plugin, and every bundled plugin ships disabled.
@@ -618,6 +655,18 @@ This is the same mechanism as the first-boot Wi-Fi staging, and it works at any 
 | `kestrel capture archive` | Archive the store and start fresh. |
 | `kestrel capture rotate` | Apply the housekeeping policy now. |
 | `kestrel capture clear --yes [--purge]` | Delete the live store (and archives with `--purge`). |
+
+### Quick-crack
+
+| Command | What it does |
+| --- | --- |
+| `kestrel crack status` | Show the worker state and a cracked/total summary. |
+| `kestrel crack list [FILTER]` | List the loot (recovered passwords, in cleartext). |
+| `kestrel crack show <ESSID\|BSSID>` | Full loot for the matching network(s). |
+| `kestrel crack wordlists` | List the wordlists on the device, in the order tried. |
+| `kestrel crack run FILE... [--wordlist NAME\|all] [--rules NAME]` | Queue a manual crack of one or more capture files. |
+| `kestrel crack enable` / `disable` | Turn on-device cracking on or off. |
+| `kestrel crack clear --yes` | Clear the loot store (captures and wordlists untouched). |
 
 ### Plugins
 

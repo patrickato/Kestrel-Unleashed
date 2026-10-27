@@ -2488,3 +2488,115 @@ def test_web_connections_time_out_on_a_stalled_request(monkeypatch):
             assert time.monotonic() - started < 3
     finally:
         server.shutdown()
+
+
+# -- Kestrel-Unleashed: the /loot page (quick-crack) -------------------------
+
+def _loot_daemon(tmp_path, wl_dir, cap_dir, capfile, crack_enabled=True):
+    class _Cap:
+        store_dir = str(cap_dir)
+
+        def hashline_files(self):
+            return [str(capfile)]
+
+        def captured_networks(self):
+            return []
+
+        def captured_access_points(self):
+            return []
+
+    class _Daemon:
+        def __init__(self):
+            import types
+            self.config = {
+                "web": {"auth": "basic", "username": "pi", "password": "hunter2"},
+                "crack": {"enabled": crack_enabled, "wordlists_dir": str(wl_dir),
+                          "order": "size"},
+            }
+            self.capture = _Cap()
+            self.loader = types.SimpleNamespace(records={})
+
+        def _fresh_config(self):
+            return self.config
+
+        def status(self):
+            return {
+                "crack": {"enabled": crack_enabled, "service": "running",
+                          "status": {"state": "idle", "cracked": 1, "targets": 1,
+                                     "pending": 0, "exhausted": 0, "wordlists": 1,
+                                     "queue": 0}},
+                "widgets": {web.CRACK_CARD_NAME: [
+                    {"name": "state", "label": "State", "value": "idle",
+                     "kind": "text"}]},
+                "capture": {"networks": 0, "access_points": 0},
+                "started": 1.0,
+            }
+
+    return _Daemon()
+
+
+def test_loot_page_shows_cleartext_and_batch_crack_enqueues(monkeypatch, tmp_path):
+    pytest.importorskip("flask")
+    import json
+    from kestrel_pi.crack import store as crack_store
+
+    crack_dir = tmp_path / "crack"; crack_dir.mkdir()
+    wl_dir = tmp_path / "wl"; wl_dir.mkdir()
+    (wl_dir / "small.txt").write_text("hunter2\n")
+    cap_dir = tmp_path / "cap"; cap_dir.mkdir()
+    capfile = cap_dir / "HomeWiFi.hc22000"
+    capfile.write_text("WPA*02*" + "a" * 32
+                       + "*001122334455*665544332211*486f6d65*00*00\n")
+    (crack_dir / "loot.json").write_text(json.dumps({"aps": {
+        "00:11:22:33:44:55": {
+            "bssid": "00:11:22:33:44:55", "essid": "HomeWiFi",
+            "status": "cracked", "password": "hunter2",
+            "device": "NETGEAR router · router", "hashlines": 1,
+            "cracked_wordlist": "small.txt", "tried": []}}}))
+    monkeypatch.setattr(web, "CRACK_DIR", str(crack_dir))
+    monkeypatch.setattr(web, "iface_ipv4", lambda i: None)
+    client = web.create_app(
+        _loot_daemon(tmp_path, wl_dir, cap_dir, capfile)).test_client()
+
+    # GET: the recovered password is shown in cleartext, and the crack form lists
+    # the capture file to pick.
+    body = client.get("/loot", headers=_basic()).get_data(as_text=True)
+    assert "HomeWiFi" in body and "hunter2" in body
+    assert "Crack more" in body and "HomeWiFi.hc22000" in body
+    # the on-device wordlist/ruleset speed-vs-odds guide is on the page
+    assert "Which wordlist + rule should I use" in body
+    assert "best64.rule" in body and "recommended ladder" in body
+
+    # POST: queue a crack of the selected file against a wordlist (pi-side write;
+    # no apply socket). The job lands in the crack queue.
+    csrf = _csrf(body)
+    resp = client.post("/loot", headers=_basic(),
+                       data={"csrf": csrf, "file": "HomeWiFi.hc22000",
+                             "wordlist": "small.txt"})
+    assert resp.status_code in (302, 303)
+    jobs = crack_store.list_jobs(str(crack_dir))
+    assert len(jobs) == 1
+    assert jobs[0][1]["wordlist"].endswith("small.txt")
+    assert jobs[0][1]["files"] == [str(capfile)]
+
+
+def test_loot_post_rejects_unknown_file(monkeypatch, tmp_path):
+    pytest.importorskip("flask")
+    from kestrel_pi.crack import store as crack_store
+
+    crack_dir = tmp_path / "crack"; crack_dir.mkdir()
+    wl_dir = tmp_path / "wl"; wl_dir.mkdir()
+    (wl_dir / "small.txt").write_text("x\n")
+    cap_dir = tmp_path / "cap"; cap_dir.mkdir()
+    capfile = cap_dir / "Net.hc22000"
+    capfile.write_text("WPA*02*" + "a" * 32
+                       + "*001122334455*665544332211*4e6574*00*00\n")
+    monkeypatch.setattr(web, "CRACK_DIR", str(crack_dir))
+    monkeypatch.setattr(web, "iface_ipv4", lambda i: None)
+    client = web.create_app(
+        _loot_daemon(tmp_path, wl_dir, cap_dir, capfile)).test_client()
+    csrf = _csrf(client.get("/loot", headers=_basic()).get_data(as_text=True))
+    # A path-traversal filename is not in the real file set, so nothing queues.
+    client.post("/loot", headers=_basic(),
+                data={"csrf": csrf, "file": "../../etc/passwd", "wordlist": "all"})
+    assert crack_store.list_jobs(str(crack_dir)) == []

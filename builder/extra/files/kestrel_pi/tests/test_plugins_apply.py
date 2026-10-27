@@ -193,11 +193,12 @@ def test_network_plugin_needs_ack_and_nothing_written_until_given(env):
     # An all-digit key is still written as a string (its declared type).
     assert table["api_key"] == "0123456789" and table["enabled"] is True
     assert open(ctl.ACK_FILE).read().startswith("acknowledged ")
-    # Only wpa-sec moved; capture, daemon and web are untouched.
+    # Only wpa-sec moved; capture, daemon and web are untouched. (Kestrel-Unleashed
+    # ships capture enabled, so "untouched" here means it stays True.)
     others = {k: v for k, v in _plugins_enabled(env).items() if k != "wpa-sec"}
     assert not any(others.values())
     data = _config(env)
-    assert data["capture"]["enabled"] is False
+    assert data["capture"]["enabled"] is True
     assert data["daemon"]["enabled"] is True and data["web"]["enabled"] is True
 
 

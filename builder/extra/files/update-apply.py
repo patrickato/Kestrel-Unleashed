@@ -153,6 +153,7 @@ LIB_SCRIPTS = [
     ("capture-launch.sh", "capture-launch", 0o755),
     ("capture-collect.py", "capture-collect", 0o755),
     ("capture-whitelist-provision.sh", "capture-whitelist-provision", 0o755),
+    ("crack-wordlist-provision.sh", "crack-wordlist-provision", 0o755),
     ("plugins-ctl.py", "plugins-ctl", 0o755),
     ("agent-provision.sh", "agent-provision", 0o755),
     ("update-apply.py", "update-apply", 0o755),

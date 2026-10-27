@@ -22,6 +22,7 @@ import time
 from . import HOOK_API_VERSION, __version__
 from .agent import AGENT_DIR
 from .agent import readout as agent_readout
+from .crack import readout as crack_readout
 from .capture import (
     DEFAULT_DENSITY_THRESHOLDS,
     DEFAULT_ENV_MAX_AGE_S,
@@ -48,6 +49,7 @@ DEFAULT_PLUGIN_PATHS = (
 DEFAULT_CAPTURE_STORE = "/var/lib/kestrel/capture"
 CAPTURE_SERVICE = "kestrel-capture.service"
 AGENT_SERVICE = "kestrel-agent.service"
+CRACK_SERVICE = "kestrel-crack.service"
 # ``systemctl is-active`` for the capture/agent services is shelled out on every
 # status() render (and the dashboard auto-refreshes). A short cache collapses
 # the repeat spawns so a slow systemd under load can't stretch each render into
@@ -170,6 +172,11 @@ class Daemon:
         # via ``__optional_requires__ = ("agent",)`` and degrades when it is None.
         self.services.provide(
             "agent", lambda: agent_readout.read_status(), owner="daemon")
+        # Likewise the quick-crack worker's published readout, so the e-ink face
+        # (and any plugin) can react to crack/loot state without importing the
+        # crack package. stdlib-only; None until the worker has published.
+        self.services.provide(
+            "crack", lambda: crack_readout.read_status(), owner="daemon")
         self.ui = StubUI(self.log.getChild("ui"))
 
         self.dispatcher = Dispatcher(
@@ -619,6 +626,14 @@ class Daemon:
         agent_elements = agent_readout.widget_elements(agent.get("status"))
         if agent_elements:
             widgets[agent_readout.CARD_NAME] = agent_elements
+        # The quick-crack worker likewise runs in its own process; merge its
+        # published readout into the same grouped widget model so the card draws
+        # like any other (the web page keeps it off the dashboard and shows it on
+        # /loot, like the agent card on /agent).
+        crack_status = crack_readout.read_status()
+        crack_elements = crack_readout.widget_elements(crack_status)
+        if crack_elements:
+            widgets[crack_readout.CARD_NAME] = crack_elements
         return {
             "version": __version__,
             "hook_api": HOOK_API_VERSION,
@@ -646,6 +661,14 @@ class Daemon:
             "environment": self._environment_state(
                 cfg, capture_state == "running"),
             "agent": agent,
+            # Quick-crack: config intent + live service state + the worker's
+            # published status (cracked/pending counts, last crack), for the
+            # dashboard Loot nav card and the /loot page.
+            "crack": {
+                "enabled": bool((cfg.get("crack") or {}).get("enabled", True)),
+                "service": self._service_state(CRACK_SERVICE),
+                "status": crack_status,
+            },
             "bluetooth": {"paired": self._bt_paired()},
             "services": self.services.names(),
             "ui": self.ui.elements(),

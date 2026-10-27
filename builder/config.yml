@@ -76,6 +76,16 @@
           - git
           - iw               # wireless PHY/monitor-mode inspection (iw phy)
           - hcxtools          # hc22000->cap conversion for wpa-sec uploads (Phase 3)
+          # Kestrel-Unleashed: on-device quick-crack of captured handshakes.
+          # hashcat cracks the stored .hc22000 lines natively (-m 22000). The Pi
+          # has no usable GPU for cracking (the VideoCore has no hashcat OpenCL
+          # path), so pocl-opencl-icd provides a CPU OpenCL device and the run is
+          # CPU-only — niced + thermal-gated by kestrel-crack.service so capture
+          # always keeps priority. ocl-icd-libopencl1 is the ICD loader hashcat
+          # links against (also pulled in by hashcat; listed for clarity).
+          - hashcat
+          - pocl-opencl-icd
+          - ocl-icd-libopencl1
           - lnav
           - lsof
           - ncdu
@@ -908,6 +918,67 @@
       name: kestrel-agent-provision.service
       enabled: yes
   ## END kestrel agent ##
+
+  ## START kestrel crack (Kestrel-Unleashed) ##
+  # On-device quick-crack of captured handshakes. The worker (the kestrel_pi.crack
+  # subpackage, installed with the kestrel_pi package above; its unit comes from
+  # the systemd units task) runs as pi, reads the capture store, runs
+  # hashcat -m 22000 against the wordlists on the CPU, and writes recovered
+  # passwords (cleartext) to the loot store that the /loot page, the e-ink face
+  # and `kestrel crack` show. Local-only (no radio, no network, no root), niced +
+  # thermal-gated so capture always keeps priority. hashcat + pocl-opencl-icd are
+  # installed from packages.general.install. See docs/developer/crack-interface.md.
+  #
+  # Kestrel-Unleashed ships it ENABLED (like capture), inert until a wordlist and
+  # a captured handshake are both present; a starter wordlist is shipped so it
+  # works out of the box. `kestrel crack disable` turns it off.
+  - name: create the kestrel crack + wordlist directories
+    file:
+      path: "{{ item }}"
+      state: directory
+      owner: pi
+      group: pi
+      mode: '0755'
+    loop:
+      - /var/lib/kestrel/crack
+      - /var/lib/kestrel/crack/queue
+      - /var/lib/kestrel/wordlists
+
+  # Curated starter wordlists so quick-crack works out of the box: starter.txt
+  # (tiny, the fastest first pass) and wpa-top.txt (a larger WPA-focused tier).
+  # The operator adds their own (rockyou, SecLists WPA lists, ...) per the README
+  # "Wordlists" section and docs/user-guide/wordlist-recommendations.md. Owned
+  # pi:pi so the worker (pi) can read them and the operator can replace them over
+  # SSH. One shell install (not a copy loop) keeps the QEMU module cost down.
+  - name: install the kestrel crack starter wordlists
+    shell: |
+      set -e
+      install -m 0644 -o pi -g pi \
+        {{ (playbook_dir ~ '/files/wordlists/starter.txt') | quote }} \
+        {{ (playbook_dir ~ '/files/wordlists/wpa-top.txt') | quote }} \
+        /var/lib/kestrel/wordlists/
+
+  - name: install the kestrel crack wordlist boot provisioner
+    copy:
+      src: "{{ playbook_dir }}/files/crack-wordlist-provision.sh"
+      dest: /usr/local/lib/kestrel/crack-wordlist-provision
+      mode: '0755'
+
+  # Inert unless a wordlists dir is staged on the boot partition
+  # (ConditionPathIsDirectory); it moves the files into wordlists_dir and clears
+  # the staged dir. It does not turn cracking on.
+  - name: enable the kestrel crack wordlist boot provisioner
+    systemd:
+      name: kestrel-crack-wordlist-provision.service
+      enabled: yes
+
+  # Kestrel-Unleashed: enable the crack worker on boot (ships enabled, like
+  # capture; it self-gates on [crack] enabled and idles when there is no work).
+  - name: "Kestrel-Unleashed: enable the crack worker on boot"
+    systemd:
+      name: kestrel-crack.service
+      enabled: yes
+  ## END kestrel crack ##
 
   - name: Delete unnecessary large folder to save space (/root/.cache)
     file:

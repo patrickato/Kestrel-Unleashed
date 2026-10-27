@@ -24,6 +24,9 @@ kestrel-daemon = "kestrel_pi.daemon:main"
 # daemon) and offline training has its own entry point.
 kestrel-agent = "kestrel_pi.agent.controller:main"
 kestrel-agent-train = "kestrel_pi.agent.train:main"
+# Kestrel-Unleashed: the on-device quick-crack worker runs in its own process
+# (keeps the hashcat child and its CPU budget off the always-on daemon).
+kestrel-crack = "kestrel_pi.crack.controller:main"
 
 [tool.setuptools.packages.find]
 include = ["kestrel_pi*"]

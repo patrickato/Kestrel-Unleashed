@@ -1,0 +1,140 @@
+# Wordlist recommendations (for the on-device quick-crack)
+
+Which wordlists to use, in what order, on **this** hardware — a Raspberry Pi
+cracking WPA2 on its **CPU** (no usable cracking GPU). See the README "Wordlists"
+section for *how* to add them; this file is about *which* and *why*.
+
+## The one fact that drives everything
+
+WPA2 is deliberately slow to crack (PBKDF2, 4096 iterations), and the Pi has no
+GPU hashcat can use, so it does roughly **1,000–2,000 guesses/second** — versus
+hundreds of thousands to millions on a desktop GPU. WPA is also **salted by the
+SSID**, so each distinct network is its own job. Consequences:
+
+- A big list is an *overnight* job, not a "quick" one. `rockyou` (~9.6M usable
+  entries) is ~1.5–3 hours **per network** at this speed.
+- **Smallest-first wins.** Quick, targeted lists catch the easy keys in minutes;
+  the big list is the last resort that grinds in the background. Kestrel does this
+  automatically (`[crack] order = "size"`), so you just drop lists in.
+- **Rules are for small lists here.** A ruleset multiplies the candidate count,
+  which is cheap on a GPU and brutal on a CPU — so pair rules with a *small* base
+  list, never with `rockyou`.
+
+Two curated lists ship on the device already (`starter.txt`, `wpa-top.txt`), so
+cracking works out of the box; the lists below are what you add for real
+coverage.
+
+## Combinations at a glance (speed vs. odds)
+
+The same table is on the device, on the web **Loot** page ("Which wordlist +
+rule should I use?"). Times are **per network** (each SSID is its own salted
+job) at a Pi 5 CPU's ~1,500 guesses/sec; "odds" is a rough relative guide, not a
+guarantee (real WPA success depends on the target). ★ = recommended.
+
+| Combination | ~Guesses/net | Est. time/net | Odds | Best for |
+| --- | --- | --- | --- | --- |
+| `starter.txt` + `wpa-top.txt` *(shipped)* | ~500 | instant | Low | the automatic first pass |
+| ★ `probable-v2-wpa-top4800` | ~4.8k | ~3 sec | Low–Med | best tiny WPA list — drop it in |
+| `top-100000` | ~100k | ~1 min | Med | broad quick sweep |
+| ★ `probable-v2-wpa-top4800` + `best64.rule` | ~0.3M | ~3–4 min | Med | quick deep pass — the sweet spot |
+| `top-100000` + `best64.rule` | ~6.4M | ~1–1.5 hr | Med–High | thorough daytime run |
+| ★ `rockyou.txt` (8+ filtered) | ~9.6M | ~1.5–3 hr | Med–High | the overnight workhorse |
+| `top-1000000` + `best64.rule` | ~64M | ~8–16 hr | High | deep overnight dig |
+| `rockyou` + `best64`, or any + `rockyou-30000` | 100M–billions | days+ | High\* | \*GPU/desktop only — too slow on the Pi |
+
+**Recommended ladder:** auto-run the small lists → add `probable-v2-wpa-top4800`
+and filtered `rockyou.txt` → deep-pass stragglers with
+`probable-v2-wpa-top4800 + best64.rule` → let `rockyou` grind overnight.
+
+## Tier 1 — quick passes (seconds to minutes). Run these first; they're small.
+
+| List | Size | Why |
+| --- | --- | --- |
+| `starter.txt` *(shipped)* | ~190 | Lazy defaults, instant. |
+| `wpa-top.txt` *(shipped)* | ~300 | WPA-focused: numeric/date/phone patterns, ISP and router defaults. |
+| SecLists **`WiFi-WPA/probable-v2-wpa-top4800.txt`** | ~4,800 | The single best tiny WPA list — real captured WPA keys, superb hit rate per second. |
+| SecLists **`Common-Credentials/10-million-password-list-top-100000.txt`** | 100k | Broad top-100k; a few minutes on the Pi. |
+
+## Tier 2 — the workhorses (tens of minutes to a few hours).
+
+| List | Size | Why |
+| --- | --- | --- |
+| **Probable-Wordlists – `WPA-probable`** (Berzerk0) | ~1–40M (several cuts) | Built from real breaches, **WPA-length filtered** (≥8 chars), so nothing is wasted on keys WPA can't have. Start with a smaller cut. |
+| **`rockyou.txt` (8+ filtered)** | ~9.6M / ~115 MB | The classic. Use the WPA-ready variant (drop sub-8-char lines) so you aren't feeding hashcat candidates it discards. The standard mid-tier. |
+| SecLists **`Common-Credentials/10-million-password-list-top-1000000.txt`** | 1M | A fast, high-value million; excellent base for a rules pass (below). |
+
+## Tier 3 — the overnight run
+
+**Short answer to "rockyou or something bigger overnight?": on a Pi, `rockyou`
+(8+ filtered) is about the right size for one overnight run — going *bigger* is
+not prudent.** The multi-gigabyte lists everyone names (`weakpass_4` ~26 GB,
+`hashesorg2019` ~12.8 GB, `kaonashi` ~5 GB) would take **days to weeks per
+network** at CPU speed and may not even fit the SD card. Raw size is the wrong
+lever on this hardware.
+
+The better overnight value is **rules on a small base list**, because a good rule
+set reaches far more real passwords per candidate than a giant raw list:
+
+- **`rockyou.txt` straight through** — the simple overnight default.
+- **or** the top-1M list **+ `best64.rule`** — 1M × 64 ≈ 64M candidates,
+  comparable runtime to rockyou but it catches *mangled* variants (`Summer2024!`,
+  `p@ssw0rd`) rockyou-straight misses.
+
+For a genuinely thorough hunt, the honest answer is to **offload to a desktop**:
+on a GPU, `rockyou` + **OneRuleToRuleThemAll** (≈52k rules) cracks ~68% of a
+typical breach vs ~33% for best64 and ~66% for dive — but that's 745 **billion**
+candidates, which is a GPU job, not a Pi one. (Kestrel stays CPU-only on purpose;
+copy the `.hc22000` off the device for a GPU run if you want that.)
+
+## Small base lists for rule attacks (keep these ≤ ~100k on a Pi)
+
+Rules shine on small, high-quality bases. Good pairings:
+
+- `starter.txt` / `wpa-top.txt` *(shipped)* — instant with `best64.rule`.
+- SecLists **`probable-v2-wpa-top4800.txt`** — the best tiny WPA base.
+- SecLists **`top-10000`** and **`top-100000`** — broad coverage, still fast.
+- A **names + years** list (e.g. SecLists `Names/` + a year suffix) — common in
+  home PSKs; great with a leetspeak/year rule.
+
+## Rulesets — already on the device, nothing to download
+
+hashcat ships its rules at `/usr/share/hashcat/rules/`, and Kestrel resolves a
+bare rule name there automatically, so you just name it in `config.toml`:
+
+- **`best64.rule`** — ~64 rules, the recommended booster. Cheap enough for the
+  Pi, and still roughly doubles a small list's hits. **This is the one to use.**
+- **`rockyou-30000.rule`** — ~30k rules, a deeper weekend pass on a *tiny* base
+  only (it's 30k× the candidates — fine on `top4800`, far too slow on `rockyou`).
+- `dive.rule` / **OneRuleToRuleThemAll** (download) — desktop/GPU only; listed
+  for completeness, not for Pi use.
+
+Two rulesets is the whole kit here: **best64 for routine deeper passes, and
+rockyou-30000 for an occasional deep dig on a small base.** Set one with:
+
+```toml
+[crack]
+rules = ["best64.rule"]
+```
+
+## Putting it together — best chances, fastest
+
+1. Drop in **`probable-v2-wpa-top4800.txt`** and **`rockyou.txt` (8+ filtered)**
+   alongside the shipped lists. The device runs them smallest-first automatically.
+2. For a deeper pass on what didn't crack, queue a small base **+ best64** from
+   the web **Loot** page or the CLI:
+   ```bash
+   kestrel crack run <file>.hc22000 --wordlist probable-v2-wpa-top4800.txt --rules best64.rule
+   ```
+3. Let **rockyou** grind overnight on the rest (it's already queued — anything
+   uncracked keeps trying).
+4. If a specific network really matters and the Pi hasn't got it, copy its
+   `.hc22000` to a desktop GPU and throw `rockyou` + OneRule at it.
+
+## Where to get them
+
+- **SecLists** (probable-v2-wpa, top-N, Names): <https://github.com/danielmiessler/SecLists> (`Passwords/WiFi-WPA/` and `Passwords/Common-Credentials/`).
+- **Probable-Wordlists** (WPA-probable, Real-Passwords): <https://github.com/berzerk0/Probable-Wordlists>.
+- **rockyou**: ships in Kali at `/usr/share/wordlists/rockyou.txt.gz`; filter to 8+ with `awk 'length>=8' rockyou.txt > rockyou-wpa.txt`.
+
+All of these are standard, openly published security wordlists. Use them only
+against networks you own or are authorized to test.

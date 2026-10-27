@@ -57,6 +57,15 @@ PWN_PLUGINS_DIR=${PWN_PLUGINS_DIR:-$PWN_LIB_DIR/plugins}
 PWN_PLUGINS_USER_DIR=${PWN_PLUGINS_USER_DIR:-/etc/kestrel/plugins}
 PWN_PLUGINS_CTL=${PWN_PLUGINS_CTL:-$PWN_LIB_DIR/plugins-ctl}
 
+# On-device quick-crack (Kestrel-Unleashed). The worker runs in its own service
+# (pi venv), reads the capture store and cracks on the CPU; the loot store, the
+# manual-job queue and the worker status live under the crack dir. Wordlists
+# live in their own dir -- config.toml's crack.wordlists_dir is the source of
+# truth and these are only the defaults.
+PWN_CRACK_DIR=${PWN_CRACK_DIR:-$PWN_STATE_DIR/crack}
+PWN_WORDLISTS_DIR=${PWN_WORDLISTS_DIR:-$PWN_STATE_DIR/wordlists}
+PWN_CRACK_SERVICE=kestrel-crack.service
+
 # Defaults; /etc/default/kestrel overrides them. These code defaults are
 # the source of truth on an in-place (app-layer) update, which does not touch
 # /etc/default, so a new key MUST be given its default here, not only in

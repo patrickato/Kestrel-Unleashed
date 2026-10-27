@@ -1,0 +1,14 @@
+[Unit]
+Description=kestrel crack wordlist pre-load from the boot partition
+# Seed the wordlists into the device dir before the crack worker starts, so an
+# enabled worker sees them on the same boot.
+Before=kestrel-crack.service
+# Runs only when a staged wordlists dir is present; the script clears it.
+ConditionPathIsDirectory=/boot/firmware/kestrel-wordlists
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/kestrel/crack-wordlist-provision
+
+[Install]
+WantedBy=multi-user.target

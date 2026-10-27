@@ -94,6 +94,55 @@ max_age_s = 900
 # a rural lane and a city centre differ; tune to taste. Also the code defaults.
 thresholds = [0, 10, 30, 60]
 
+# --- Kestrel-Unleashed: on-device quick-crack ------------------------------
+# Auto-crack captured handshakes on the Pi itself. The worker (kestrel-crack.service,
+# runs as pi) reads the .hc22000 store, runs hashcat -m 22000 against your
+# wordlists on the CPU, and writes recovered passwords (cleartext) to the loot
+# store, which the dashboard /loot page, the e-ink face and `kestrel crack` show.
+# Local-only: no radio, no network, no root -- it only reads data you already
+# captured. CPU-only by design (the Pi has no usable cracking GPU), and bounded
+# (niced + thermal-gated) so capture always keeps priority and the board never
+# cooks. Manage with `kestrel crack ...` or the web /loot page.
+# See docs/developer/crack-interface.md and the README "Wordlists" section.
+[crack]
+enabled = true              # auto-crack new handshakes as they are captured.
+                            # Inert with no wordlists present (nothing to try),
+                            # so it is safe to leave on; a shipped starter list and
+                            # any you add arm it. `kestrel crack disable` stops it.
+# Where wordlists live on the device. Every readable file here is a candidate.
+# Add your own by copying into this dir (scp) or by staging them on the boot
+# partition under /boot/firmware/kestrel-wordlists/ (auto-moved here on first
+# boot). See the README "Wordlists" section for the exact drop-in steps.
+wordlists_dir = "/var/lib/kestrel/wordlists"
+# Order wordlists are tried in: "size" (smallest first -- fastest to a common
+# password, recommended), "name" (alphabetical), or an explicit comma-separated
+# list of filenames (those first in order, then any others by size).
+order = "size"
+# Optional hashcat rule files, applied to every wordlist run. Empty = straight
+# wordlist, no mangling -- the fast first pass. A bare name is looked up in
+# wordlists_dir, then in hashcat's own rules dir (/usr/share/hashcat/rules), so
+# the bundled rules work with nothing to download: "best64.rule" (fast, the
+# recommended booster) or "rockyou-30000.rule" (deeper). A rule set multiplies
+# runtime, so pair it with a SMALL wordlist and leave it off for big lists. See
+# docs/user-guide/wordlist-recommendations.md.
+rules = []
+# Resource guardrails -- cracking is a background sipper, never the priority.
+nice = 15                   # CPU niceness for the hashcat child (0-19; higher
+                            # yields more readily to capture/daemon/agent)
+workload = 1                # hashcat -w (1 = low/desktop-friendly .. 4 = nightmare).
+                            # 1 keeps the Pi responsive and cooler; raise only on a
+                            # well-cooled board you don't mind pinning.
+max_temp_c = 75             # pause cracking at/above this CPU temp (hard cap 85),
+                            # the same thermal budget as the learning agent's training
+resume_temp_c = 68          # resume paused cracking once the CPU falls to/below this
+max_job_seconds = 0         # per (handshake x wordlist) time budget in seconds;
+                            # 0 = run the wordlist to the end. Set e.g. 1800 to cap.
+# "Leave it alone": once an AP yields a crackable hashline, capture is done with it
+# (AngryOxide de-dupes per AP). The cracker keeps that hashline queued until it is
+# cracked or every wordlist is exhausted, then stops -- but a newly added wordlist
+# re-arms the exhausted ones so a bigger list automatically gets a fresh pass.
+recrack_on_new_wordlist = true
+
 [agent]
 # Phase 4: the reinforcement-learning capture agent. It ships OFF; with the
 # agent off, capture keeps running the Phase 2 scripted sweep. The agent never
