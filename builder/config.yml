@@ -60,6 +60,16 @@
           - bluez            # Bluetooth stack for PAN onboarding (Phase 1)
           - dphys-swapfile
           - ethtool          # capture-adapter driver inspection (ethtool -i wlanX)
+          # Kestrel-Unleashed: firmware for the common external USB capture dongles,
+          # so they "just work" out of the box. All use in-kernel mac80211 drivers
+          # (no DKMS): firmware-mediatek = MT7612U (Alfa AWUS036ACM), firmware-atheros
+          # = AR9271 (Alfa AWUS036NHA), firmware-realtek = RTL81xx, firmware-libertas
+          # = older adapters. NOTE: RTL8812AU dongles (Alfa AWUS036ACH/AC) need an
+          # out-of-tree DKMS driver Kestrel deliberately omits — not covered here.
+          - firmware-atheros
+          - firmware-libertas
+          - firmware-mediatek
+          - firmware-realtek
           - fonts-dejavu-core  # glyph coverage for the e-ink emoticon faces (Phase 5)
           - fonts-firacode
           - gawk
