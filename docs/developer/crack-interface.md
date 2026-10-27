@@ -56,7 +56,7 @@ always keeps priority.
 - **`status.json`** (world-readable) — the worker's live state for the UI:
   ```jsonc
   {"contract_version": 1, "enabled": true,
-   "state": "cracking",   // idle | cracking | paused-thermal | disabled | no-hashcat | no-wordlists | error
+   "state": "cracking",   // idle | cracking | paused-thermal | disabled | no-aircrack | no-capture | no-wordlists | error
    "targets": 46, "cracked": 12, "pending": 30, "exhausted": 4,
    "wordlists": 3, "queue": 2, "temp_c": 61.2,
    "current": {"essid": "...", "bssid": "...", "wordlist": "...", "origin": "auto|manual"},

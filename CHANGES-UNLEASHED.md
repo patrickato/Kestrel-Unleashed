@@ -201,6 +201,40 @@ install wordlists). The suggestions work without it (masks + existing lists), so
 an app-layer update gets the feature and the curated list rides in on the next
 image.
 
+### Changed: the crack engine is now aircrack-ng, not hashcat (the Pi can't run hashcat)
+Hardware testing proved hashcat cannot crack WPA on the Pi at all: hashcat needs
+an OpenCL device, the Pi's only CPU OpenCL is **pocl**, and pocl caps a single
+allocation at **256 MB** — too small for the `-m 22000` kernel at *any* settings
+(`-w 1 -n 1 -T 1 --backend-vector-width 1` still fails with "not enough
+allocatable device memory"), and pocl won't expose the board's real 16 GB. No
+hashcat flag gets under the cap. So the worker now drives **aircrack-ng**, which
+cracks WPA on the CPU natively (no OpenCL, no cap) at ~1,200 keys/s on a Pi 5.
+
+- `builder/config.yml`: drop `hashcat`/`pocl-opencl-icd`/`ocl-icd-libopencl1`;
+  add `aircrack-ng`, `tcpdump` (aircrack reads packet captures, so the rolling
+  pcapng is converted to a classic pcap first) and `crunch` (streams a mask's
+  keyspace into aircrack for brute force).
+- `kestrel_pi/crack/aircrack.py` (new, stdlib, unit-tested): capture→pcap
+  conversion, the dictionary and stdin (mask) command builders, the
+  mask→crunch mapping, and output parsing/classification.
+- `kestrel_pi/crack/controller.py`: the worker converts the capture to pcap once
+  per cycle and runs aircrack **per AP** (by BSSID); dictionaries run directly,
+  masks via `crunch | aircrack-ng -w -`. Per-target error handling (an errored
+  AP stays pending, never a false "exhausted"); new `no-aircrack`/`no-capture`
+  states. Same loot store, wordlist ladder, device-aware suggestions, thermal
+  gating and glass-box error surfacing.
+- `kestrel_pi/capture.py`: `CaptureInterface.pcapng_files()` exposes the rolling
+  capture for the backend.
+
+Trade-offs vs hashcat (noted in `docs/developer/deferred.md`): aircrack has no
+rule engine (`[crack] rules` is a no-op), and only **uniform** masks (`?d?d…`,
+`?H?H…`) map to crunch — mixed/custom masks are skipped. `hashcat.py` stays as a
+dormant, still-tested module for a future GPU host; `[crack] kernel_accel`/
+`workload` apply only to that path.
+
+**Release impact: reflash-class** (swaps apt packages), and app-layer-updatable
+for the worker code once the packages are on the image.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

@@ -270,7 +270,7 @@ It shows whether capture is enabled and running, the resolved dongle and driver,
 
 ## On-device quick-crack
 
-Kestrel-Unleashed cracks the handshakes it captures right on the device, so a recovered password appears on the dashboard and in the terminal with no desktop round-trip. A background worker runs `hashcat` against your wordlists on the CPU. It is local-only — it reads handshakes you already captured and never touches the radio or the network — and it is niced and thermal-gated so capturing always keeps priority and the Pi never overheats while cracking. It ships **on** and cracks new handshakes automatically, but does nothing until a wordlist is present.
+Kestrel-Unleashed cracks the handshakes it captures right on the device, so a recovered password appears on the dashboard and in the terminal with no desktop round-trip. A background worker runs **aircrack-ng** against your wordlists on the CPU (hashcat needs a GPU-style OpenCL device the Pi doesn't usefully have, so aircrack-ng — native CPU WPA — is the engine). It is local-only — it reads handshakes you already captured and never touches the radio or the network — and it is niced and thermal-gated so capturing always keeps priority and the Pi never overheats while cracking. It ships **on** and cracks new handshakes automatically, but does nothing until a wordlist is present.
 
 ### Adding wordlists
 

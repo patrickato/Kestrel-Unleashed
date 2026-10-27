@@ -77,15 +77,17 @@
           - iw               # wireless PHY/monitor-mode inspection (iw phy)
           - hcxtools          # hc22000->cap conversion for wpa-sec uploads (Phase 3)
           # Kestrel-Unleashed: on-device quick-crack of captured handshakes.
-          # hashcat cracks the stored .hc22000 lines natively (-m 22000). The Pi
-          # has no usable GPU for cracking (the VideoCore has no hashcat OpenCL
-          # path), so pocl-opencl-icd provides a CPU OpenCL device and the run is
-          # CPU-only — niced + thermal-gated by kestrel-crack.service so capture
-          # always keeps priority. ocl-icd-libopencl1 is the ICD loader hashcat
-          # links against (also pulled in by hashcat; listed for clarity).
-          - hashcat
-          - pocl-opencl-icd
-          - ocl-icd-libopencl1
+          # aircrack-ng cracks WPA on the CPU natively (no OpenCL) -- hashcat
+          # needs an OpenCL device and the Pi's only one is pocl, which caps a
+          # single allocation at 256 MB, too small for the -m 22000 kernel at any
+          # setting, so hashcat can't run WPA here at all. aircrack reads packet
+          # captures, so tcpdump converts the rolling pcapng to a classic pcap
+          # first; crunch streams a mask's keyspace into aircrack for brute force.
+          # Niced + thermal-gated by kestrel-crack.service so capture keeps
+          # priority. (hcxtools above stays for the wpa-sec uploader.)
+          - aircrack-ng
+          - tcpdump
+          - crunch
           # Kestrel-Unleashed: WPS PIN / Pixie-Dust attacks. reaver drives the
           # attack (and ships `wash`, the WPS scanner); pixiewps does the offline
           # Pixie-Dust computation reaver calls. CLI-driven (`kestrel wps`), no

@@ -90,12 +90,55 @@ class FakeHashcat:
             return [ln.strip() for ln in handle if ln.strip()]
 
 
-def _worker(tmp_path, config_path, runner, temp=50.0):
+class FakeAircrack:
+    """Stand-in for tcpdump + aircrack-ng. ``cracks`` = ``{wordlist_basename:
+    {BSSID: pass}}`` for dictionary runs; ``mask_cracks`` = ``{BSSID: pass}`` for
+    a mask run (routed through :meth:`run_mask`, which the worker calls instead of
+    the plain runner for the crunch|aircrack pipe). A tcpdump convert touches the
+    output pcap; an aircrack run reports KEY FOUND for a match, else NOT FOUND."""
+
+    def __init__(self, cracks=None, mask_cracks=None):
+        self.cracks = cracks or {}
+        self.mask_cracks = mask_cracks or {}
+        self.crack_calls = []
+
+    def __call__(self, cmd, timeout=None):
+        if cmd[0] == "tcpdump":
+            open(cmd[cmd.index("-w") + 1], "w").close()      # create the fake pcap
+            return 0, "", ""
+        if cmd[0] == "aircrack-ng":
+            wl = os.path.basename(cmd[cmd.index("-w") + 1])
+            bssid = cmd[cmd.index("-b") + 1].upper()
+            self.crack_calls.append(wl)
+            pw = self.cracks.get(wl, {}).get(bssid)
+            return (0, "KEY FOUND! [ %s ]\n" % pw, "") if pw is not None \
+                else (1, "KEY NOT FOUND\n", "")
+        return 0, "", ""
+
+    def run_mask(self, pcaps, bssid, crunch_args, timeout=None):
+        self.crack_calls.append("mask")
+        pw = self.mask_cracks.get(bssid.upper())
+        return (0, "KEY FOUND! [ %s ]\n" % pw, "") if pw is not None \
+            else (1, "KEY NOT FOUND\n", "")
+
+
+def _worker(tmp_path, config_path, runner, temp=50.0, pcapng=True):
+    """A worker wired to a fake runner. Patches aircrack/tcpdump as present and
+    (by default) drops a rolling pcapng in the capture store so the worker has a
+    capture to crack from."""
     store = os.path.join(tmp_path, "capture")
     crack_dir = os.path.join(tmp_path, "crack")
-    return controller.CrackWorker(
+    if pcapng:
+        _write(os.path.join(store, ".run", "cap.pcapng"), "pkts")
+    import kestrel_pi.crack.controller as ctl
+    ctl.ac.have_aircrack = lambda: True
+    ctl.ac.have_tcpdump = lambda: True
+    worker = controller.CrackWorker(
         config_path=config_path, crack_dir=crack_dir, capture_store=store,
         runner=runner, temp_reader=lambda: temp, clock=lambda: 1000.0)
+    if isinstance(runner, FakeAircrack):
+        worker._run_mask = runner.run_mask
+    return worker
 
 
 # --- wordlists -------------------------------------------------------------
@@ -213,10 +256,8 @@ def test_run_once_cracks_and_marks(tmp_path):
     _write(os.path.join(d, "capture", "nets.hc22000"),
            _hashline(AP1, "HomeWiFi") + "\n" + _hashline(AP2, "Office") + "\n")
     cfg = _config(d, os.path.join(d, "wordlists"))
-    fake = FakeHashcat(cracks={"small.txt": {AP1C: "hunter2!"}})
+    fake = FakeAircrack(cracks={"small.txt": {AP1C: "hunter2!"}})
     worker = _worker(tmp_path, cfg, fake)
-    import kestrel_pi.crack.controller as ctl
-    ctl.hc.have_hashcat = lambda: True
 
     state, did = worker.run_once()
     assert state == "cracking" and did
@@ -234,9 +275,9 @@ def test_run_once_cracks_and_marks(tmp_path):
     assert status["cracked"] == 1 and status["targets"] == 2
 
 
-def test_hashcat_error_is_not_exhaustion(tmp_path):
-    # A hashcat that errors (e.g. no OpenCL device) must NOT mark the wordlist
-    # tried -- otherwise a systematic failure masquerades as "exhausted". The
+def test_aircrack_error_is_not_exhaustion(tmp_path):
+    # aircrack erroring (e.g. no handshake for that BSSID in the capture) must NOT
+    # mark the wordlist tried -- else a failure masquerades as "exhausted". The
     # AP stays pending and the worker surfaces the error in its status.
     d = str(tmp_path)
     _write(os.path.join(d, "wordlists", "small.txt"), "hunter2!\n")
@@ -245,13 +286,12 @@ def test_hashcat_error_is_not_exhaustion(tmp_path):
     cfg = _config(d, os.path.join(d, "wordlists"))
 
     def runner(cmd, timeout=None):
-        if "--show" in cmd:
+        if cmd[0] == "tcpdump":
+            open(cmd[cmd.index("-w") + 1], "w").close()
             return 0, "", ""
-        return 255, "", "clGetDeviceIDs(): No devices found/left"
+        return 1, "No valid WPA handshakes found\n", ""     # aircrack error
 
     worker = _worker(tmp_path, cfg, runner)
-    import kestrel_pi.crack.controller as ctl
-    ctl.hc.have_hashcat = lambda: True
 
     worker.run_once()
     aps = worker.loot.load()
@@ -259,18 +299,18 @@ def test_hashcat_error_is_not_exhaustion(tmp_path):
     assert not aps[AP1C].get("tried")              # the failed list is not recorded
     status = readout.read_status(worker.crack_dir)
     assert status["state"] == "error"
-    assert "No devices" in status["error"]
+    assert "handshake" in status["error"].lower()
 
 
 def test_thermal_gate(tmp_path):
     cfg = _config(str(tmp_path), os.path.join(str(tmp_path), "wordlists"))
-    worker = _worker(tmp_path, cfg, FakeHashcat(), temp=90.0)
+    worker = _worker(tmp_path, cfg, FakeAircrack(), temp=90.0)
     conf = worker.config()
     assert worker.thermal_ok(conf) is False                 # 90 >= max_temp_c
-    worker2 = _worker(tmp_path, cfg, FakeHashcat(), temp=50.0)
+    worker2 = _worker(tmp_path, cfg, FakeAircrack(), temp=50.0)
     assert worker2.thermal_ok(worker2.config()) is True
     # hard cap: even an absurd max_temp_c won't run at/above 85
-    hot = _worker(tmp_path, cfg, FakeHashcat(), temp=HARD_MAX_TEMP_C + 1.0)
+    hot = _worker(tmp_path, cfg, FakeAircrack(), temp=HARD_MAX_TEMP_C + 1.0)
     assert hot.thermal_ok({"max_temp_c": 200, "resume_temp_c": 50}) is False
 
 
@@ -282,10 +322,8 @@ def test_manual_job_overrides_and_runs(tmp_path):
     capfile = os.path.join(d, "capture", "nets.hc22000")
     _write(capfile, _hashline(AP1, "HomeWiFi") + "\n")
     cfg = _config(d, os.path.join(d, "wordlists"))
-    fake = FakeHashcat(cracks={"rockyou.txt": {AP1C: "sekret99"}})
+    fake = FakeAircrack(cracks={"rockyou.txt": {AP1C: "sekret99"}})
     worker = _worker(tmp_path, cfg, fake)
-    import kestrel_pi.crack.controller as ctl
-    ctl.hc.have_hashcat = lambda: True
     # exhaust AP1 against small.txt so auto would leave it alone...
     worker.run_once()
     assert worker.loot.load()[AP1C]["status"] == "pending"  # only small tried; still pending vs rockyou? no: rockyou present
@@ -300,17 +338,15 @@ def test_manual_job_overrides_and_runs(tmp_path):
 def test_disabled_and_no_wordlists(tmp_path):
     d = str(tmp_path)
     _write(os.path.join(d, "capture", "nets.hc22000"), _hashline(AP1, "Net") + "\n")
-    import kestrel_pi.crack.controller as ctl
-    ctl.hc.have_hashcat = lambda: True
     # disabled => state disabled, but targets still tracked
     cfg_off = _config(d, os.path.join(d, "wordlists"), enabled=False)
-    w = _worker(tmp_path, cfg_off, FakeHashcat())
+    w = _worker(tmp_path, cfg_off, FakeAircrack())
     assert w.run_once()[0] == "disabled"
     assert AP1C in w.loot.load()                             # loot still populated
     # enabled but no wordlists => no-wordlists
     cfg_on = _config(d, os.path.join(d, "wordlists_empty"))
     os.makedirs(os.path.join(d, "wordlists_empty"), exist_ok=True)
-    w2 = _worker(tmp_path, cfg_on, FakeHashcat())
+    w2 = _worker(tmp_path, cfg_on, FakeAircrack())
     assert w2.run_once()[0] == "no-wordlists"
 
 
@@ -334,10 +370,8 @@ def test_masks_run_after_wordlists(tmp_path):
     _write(os.path.join(d, "wordlists", "small.txt"), "nope\n")   # won't crack it
     _write(os.path.join(d, "capture", "nets.hc22000"), _hashline(AP1, "HomeWiFi") + "\n")
     cfg = _config(d, os.path.join(d, "wordlists"), masks=["?d?d?d?d?d?d?d?d"])
-    fake = FakeHashcat(cracks={"?d?d?d?d?d?d?d?d": {AP1C: "12345678"}})
+    fake = FakeAircrack(mask_cracks={AP1C: "12345678"})
     worker = _worker(tmp_path, cfg, fake)
-    import kestrel_pi.crack.controller as ctl
-    ctl.hc.have_hashcat = lambda: True
 
     worker.run_once()                       # wordlist pass first — no crack
     assert worker.loot.load()[AP1C]["status"] == "pending"   # mask still untried
@@ -353,10 +387,8 @@ def test_manual_mask_job(tmp_path):
     capfile = os.path.join(d, "capture", "nets.hc22000")
     _write(capfile, _hashline(AP1, "HomeWiFi") + "\n")
     cfg = _config(d, os.path.join(d, "wordlists"))
-    fake = FakeHashcat(cracks={"?d?d?d?d": {AP1C: "4815"}})
+    fake = FakeAircrack(mask_cracks={AP1C: "4815"})
     worker = _worker(tmp_path, cfg, fake)
-    import kestrel_pi.crack.controller as ctl
-    ctl.hc.have_hashcat = lambda: True
     store_mod.enqueue_job(worker.crack_dir, [capfile], mask="?d?d?d?d", label="pin")
     worker.run_once()
     rec = worker.loot.load()[AP1C]

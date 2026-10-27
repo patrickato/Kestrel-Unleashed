@@ -59,7 +59,8 @@ _STATE_LABEL = {
     "idle": "idle",
     "paused-thermal": "paused (hot)",
     "disabled": "disabled",
-    "no-hashcat": "hashcat missing",
+    "no-aircrack": "aircrack-ng missing",
+    "no-capture": "waiting for a capture",
     "no-wordlists": "no wordlists",
     "error": "error",
 }

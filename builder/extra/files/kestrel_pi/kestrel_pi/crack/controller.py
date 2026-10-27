@@ -24,14 +24,13 @@ import logging
 import os
 import subprocess
 import sys
-import tempfile
 import time
 
-from ..capture import CaptureInterface, parse_hashline
+from ..capture import CaptureInterface
 from ..config import DEFAULT_CONFIG_PATH, load_config, section
 from . import (CRACK_DEFAULTS, CRACK_DIR, DEFAULT_CAPTURE_STORE, HARD_MAX_TEMP_C,
                POTFILE_NAME, STATUS_NAME)
-from . import hashcat as hc
+from . import aircrack as ac
 from . import store as store_mod
 from . import wordlists as wl_mod
 from .store import LootStore
@@ -57,9 +56,9 @@ def read_temp_c(path=THERMAL_ZONE):
 
 
 def _default_runner(cmd, timeout=None):
-    """Run ``cmd``; return ``(returncode, stdout, stderr)``. hashcat's exit code
-    is advisory here (results are read with ``--show``), so a non-zero never
-    raises; a timeout or a missing binary are reported as codes."""
+    """Run ``cmd``; return ``(returncode, stdout, stderr)``. A non-zero exit
+    never raises (aircrack 'key not found' is a normal result read from the
+    output); a timeout or a missing binary are reported as codes."""
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, check=False,
                               stdin=subprocess.DEVNULL, timeout=timeout)
@@ -67,7 +66,7 @@ def _default_runner(cmd, timeout=None):
     except subprocess.TimeoutExpired as exc:
         return 124, (exc.stdout or "" if isinstance(exc.stdout, str) else ""), "timeout"
     except FileNotFoundError:
-        return 127, "", "hashcat not found"
+        return 127, "", "command not found"
 
 
 def targets_from_events(events):
@@ -138,70 +137,98 @@ class CrackWorker:
         floor = min(float(conf.get("resume_temp_c", 68)), ceiling)
         return temp <= floor if resuming else temp < ceiling
 
-    # -- cracking ---------------------------------------------------------
-    def _materialize(self, lines):
-        """Write hashlines to a temp file hashcat reads; return its path."""
-        tmp_dir = os.path.join(self.crack_dir, ".tmp")
-        os.makedirs(tmp_dir, exist_ok=True)
-        fd, path = tempfile.mkstemp(prefix="hashes-", suffix=".hc22000",
-                                    dir=tmp_dir)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            for line in lines:
-                handle.write(line.rstrip("\n") + "\n")
-        return path
+    # -- cracking (aircrack-ng backend) -----------------------------------
+    def _prepare_pcaps(self):
+        """Convert each capture pcapng to a classic pcap aircrack reads, cached by
+        source mtime under the crack dir. Returns the pcap paths (empty if there
+        are none yet or tcpdump is missing)."""
+        pcapngs = self.capture.pcapng_files()
+        if not pcapngs or not ac.have_tcpdump():
+            return []
+        out_dir = os.path.join(self.crack_dir, ".pcap")
+        os.makedirs(out_dir, exist_ok=True)
+        pcaps = []
+        for src in pcapngs:
+            dst = os.path.join(out_dir, os.path.basename(src) + ".pcap")
+            try:
+                fresh = (os.path.exists(dst)
+                         and os.path.getmtime(dst) >= os.path.getmtime(src))
+                if not fresh:
+                    rc, _o, _e = self._runner(ac.convert_cmd(src, dst), timeout=180)
+                    if rc != 0:
+                        continue
+                pcaps.append(dst)
+            except OSError:
+                continue
+        return pcaps
 
-    def _run_attack(self, lines, attack, conf, rules=()):
-        """Run one hashcat pass (``attack`` is a dict- or mask-attack from
-        :func:`.store.build_attacks`) over ``lines``. Returns ``(cracked, ok)``:
-        ``cracked`` is ``{bssid: password}`` read back via ``--show`` against the
-        shared potfile (never scraped from stdout), and ``ok`` is True only when
-        hashcat genuinely ran to completion (exit 0 cracked / 1 exhausted / 124
-        our budget). ``ok=False`` means hashcat **errored** -- the caller must NOT
-        record the wordlist as tried, or a systematic failure (e.g. no OpenCL
-        device) would masquerade as "exhausted". ``rules`` apply to a dict attack
-        only."""
-        kind = attack.get("kind", "dict")
-        if not lines:
-            return {}, True
-        if kind == "dict" and not os.path.isfile(attack.get("path", "")):
-            return {}, True                       # missing wordlist: skip, not an error
-        if kind == "mask" and not attack.get("mask"):
-            return {}, True
-        hashfile = self._materialize(lines)
+    def _run_mask(self, pcaps, bssid, crunch_args, timeout):  # pragma: no cover
+        """Stream a mask's keyspace from crunch into aircrack's stdin. Separate
+        from the injected runner because it is a pipeline; the pure mask->crunch
+        mapping (:func:`aircrack.mask_to_crunch`) is what the tests cover."""
+        gen = subprocess.Popen(crunch_args, stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL)
         try:
-            budget = int(conf.get("max_job_seconds") or 0) or None
-            accel = conf.get("kernel_accel", 1)
-            if kind == "mask":
-                cmd = hc.build_mask_cmd(hashfile, attack["mask"], self.potfile,
-                                        nice=conf.get("nice", 15),
-                                        workload=conf.get("workload", 1),
-                                        kernel_accel=accel)
-            else:
-                cmd = hc.build_crack_cmd(hashfile, attack["path"], self.potfile,
-                                         rules=rules, nice=conf.get("nice", 15),
-                                         workload=conf.get("workload", 1),
-                                         kernel_accel=accel)
-            rc, _out, err = self._runner(cmd, timeout=budget)
-            ok = rc in (0, 1, 124)  # 0 cracked, 1 exhausted, 124 our timeout
-            if not ok:
-                msg = ("hashcat exited %s: %s" % (rc, (err or "").strip()))[:200]
-                log.warning("%s", msg)
-                self._last_error = msg
-            else:
-                self._last_error = ""
-            rc2, show_out, _err2 = self._runner(
-                hc.build_show_cmd(hashfile, self.potfile))
-            cracked = {}
-            for hashline, password in hc.parse_show(show_out):
-                ev = parse_hashline(hashline)
-                if ev and ev.bssid:
-                    cracked[ev.bssid.upper()] = password
-            return cracked, ok
+            proc = subprocess.run(ac.build_stdin_cmd(pcaps, bssid), stdin=gen.stdout,
+                                  capture_output=True, text=True, timeout=timeout)
+            return proc.returncode, proc.stdout or "", proc.stderr or ""
+        except subprocess.TimeoutExpired as exc:
+            return 124, (exc.stdout or "" if isinstance(exc.stdout, str) else ""), "timeout"
+        except FileNotFoundError:
+            return 127, "", "crunch/aircrack-ng not found"
         finally:
             try:
-                os.remove(hashfile)
+                if gen.stdout:
+                    gen.stdout.close()
+                gen.kill()
             except OSError:
                 pass
+
+    def _crack_one(self, pcaps, bssid, attack, conf):
+        """Crack one AP (``bssid``) in ``pcaps`` with ``attack``. Returns
+        ``(password_or_None, ok)``; ``ok`` is False only when aircrack actually
+        **errored** (bad capture / no handshake), so a run that simply didn't find
+        the key still counts as tried."""
+        timeout = int(conf.get("max_job_seconds") or 0) or None
+        kind = attack.get("kind", "dict")
+        if kind == "mask":
+            crunch_args = ac.mask_to_crunch(attack.get("mask", ""))
+            if crunch_args is None:
+                return None, True            # mask crunch can't express: skip
+            rc, out, err = self._run_mask(pcaps, bssid, crunch_args, timeout)
+        else:
+            wl = attack.get("path", "")
+            if not os.path.isfile(wl):
+                return None, True            # missing wordlist: skip, not an error
+            rc, out, err = self._runner(ac.build_dict_cmd(pcaps, bssid, wl),
+                                        timeout=timeout)
+        text = (out or "") + "\n" + (err or "")
+        verdict = ac.classify(text)
+        if verdict == "cracked":
+            return ac.parse_key(out), True
+        if verdict == "exhausted":
+            return None, True
+        msg = ("aircrack-ng: " + ac.error_detail(text))[:200]
+        log.warning("%s", msg)
+        self._last_error = msg
+        return None, False
+
+    def _run_attack(self, targets, attack, conf, pcaps):
+        """Run ``attack`` against each target AP. Returns ``(cracked, failed)``:
+        ``cracked`` is ``{BSSID: password}`` and ``failed`` is the BSSIDs whose
+        run errored (so the caller does not record the wordlist as tried for
+        them, and a systematic failure never masquerades as 'exhausted')."""
+        cracked, failed = {}, set()
+        for target in targets:
+            bssid = (target.get("bssid") or "").upper()
+            if not bssid:
+                continue
+            password, ok = self._crack_one(pcaps, bssid, attack, conf)
+            if password is not None:
+                cracked[bssid] = password
+            elif not ok:
+                failed.add(bssid)
+        return cracked, failed
 
     # -- one pass ---------------------------------------------------------
     def run_once(self):
@@ -216,30 +243,36 @@ class CrackWorker:
         masks = [str(m).strip() for m in (conf.get("masks") or []) if str(m).strip()]
         attacks = store_mod.build_attacks(wordlists, masks)
         all_sigs = {a["sig"] for a in attacks}
-        rules = wl_mod.resolve_rules(conf.get("rules"), conf.get("wordlists_dir"))
         recrack = bool(conf.get("recrack_on_new_wordlist", True))
 
         state, did_work, current = "idle", False, None
+        self._last_error = ""
         if not conf.get("enabled", True):
             state = "disabled"
-        elif not hc.have_hashcat():
-            state = "no-hashcat"
+        elif not (ac.have_aircrack() and ac.have_tcpdump()):
+            state = "no-aircrack"
         else:
-            jobs = store_mod.list_jobs(self.crack_dir)
-            if jobs:
-                state, current = "cracking", self._run_manual(jobs[0], aps, rules, conf)
-                did_work = True
-            elif not attacks:
-                state = "no-wordlists"
+            pcaps = self._prepare_pcaps()
+            if not pcaps:
+                # aircrack cracks from the packet capture; nothing to do until the
+                # rolling pcapng has handshakes (the hashline store isn't enough).
+                state = "no-capture"
             else:
-                batch = store_mod.next_auto_batch(aps, targets, attacks, recrack)
-                if batch is not None:
-                    state, current = "cracking", self._run_auto(batch, aps, rules, conf)
+                jobs = store_mod.list_jobs(self.crack_dir)
+                if jobs:
+                    state, current = "cracking", self._run_manual(jobs[0], aps, pcaps, conf)
                     did_work = True
+                elif not attacks:
+                    state = "no-wordlists"
+                else:
+                    batch = store_mod.next_auto_batch(aps, targets, attacks, recrack)
+                    if batch is not None:
+                        state, current = "cracking", self._run_auto(batch, aps, pcaps, conf)
+                        did_work = True
 
         LootStore.refresh_statuses(aps, all_sigs)
         self.loot.save(aps)
-        # A hashcat failure this pass takes precedence over idle/cracking, so the
+        # An aircrack failure this pass takes precedence over idle/cracking, so the
         # dashboard shows the real error instead of a silent false "exhausted".
         if self._last_error and state in ("idle", "cracking"):
             state = "error"
@@ -252,14 +285,9 @@ class CrackWorker:
             events.extend(self.capture.read_events(path))
         return events
 
-    def _run_auto(self, batch, aps, rules, conf):
+    def _run_auto(self, batch, aps, pcaps, conf):
         attack, tgts = batch
-        lines = []
-        for target in tgts:
-            for line in target["lines"]:
-                if line not in lines:
-                    lines.append(line)
-        cracked, ok = self._run_attack(lines, attack, conf, rules=rules)
+        cracked, failed = self._run_attack(tgts, attack, conf, pcaps)
         now = self._clock()
         for target in tgts:
             bssid = target["bssid"].upper()
@@ -268,14 +296,14 @@ class CrackWorker:
                 continue
             if bssid in cracked:
                 LootStore.mark_cracked(rec, cracked[bssid], attack["name"], now=now)
-            elif ok:
-                # Only record the wordlist as tried when hashcat actually ran it;
-                # on an error we leave the AP pending so it retries once fixed.
+            elif bssid not in failed:
+                # Record the wordlist as tried only when aircrack actually ran it;
+                # on an error the AP stays pending so it retries once fixed.
                 LootStore.mark_tried(rec, attack["sig"])
         return {"essid": tgts[0].get("essid"), "bssid": tgts[0].get("bssid"),
                 "wordlist": attack["name"], "origin": "auto", "started": now}
 
-    def _run_manual(self, job_entry, aps, default_rules, conf):
+    def _run_manual(self, job_entry, aps, pcaps, conf):
         path, job = job_entry
         mask = (job.get("mask") or "").strip()
         wordlist = job.get("wordlist") or ""
@@ -286,21 +314,14 @@ class CrackWorker:
             attack = {"kind": "dict", "name": os.path.basename(wordlist),
                       "path": wordlist, "sig": self._wordlist_sig(wordlist)}
         files = [f for f in (job.get("files") or []) if os.path.isfile(f)]
-        rules = wl_mod.resolve_rules(job.get("rules"), conf.get("wordlists_dir")) \
-            or default_rules
         events = []
         for f in files:
             events.extend(self.capture.read_events(f))
         targets = targets_from_events(events)
         for target in targets:
             LootStore.upsert(aps, target, now=self._clock())
-        lines = []
-        for target in targets:
-            for line in target["lines"]:
-                if line not in lines:
-                    lines.append(line)
-        cracked, ok = self._run_attack(lines, attack, conf, rules=rules) \
-            if lines else ({}, True)
+        cracked, failed = self._run_attack(targets, attack, conf, pcaps) \
+            if targets else ({}, set())
         now = self._clock()
         for target in targets:
             bssid = target["bssid"].upper()
@@ -309,7 +330,7 @@ class CrackWorker:
                 continue
             if bssid in cracked:
                 LootStore.mark_cracked(rec, cracked[bssid], attack["name"], now=now)
-            elif attack["sig"] and ok:
+            elif attack["sig"] and bssid not in failed:
                 LootStore.mark_tried(rec, attack["sig"])
         store_mod.remove_job(path)
         return {"essid": job.get("label") or attack["name"], "bssid": "",
@@ -357,7 +378,7 @@ class CrackWorker:
         paused = False
         while stop is None or not stop():
             conf = self.config()
-            if conf.get("enabled", True) and hc.have_hashcat():
+            if conf.get("enabled", True) and ac.have_aircrack():
                 if not self.thermal_ok(conf, resuming=paused):
                     paused = True
                     masks = [str(m).strip() for m in (conf.get("masks") or [])

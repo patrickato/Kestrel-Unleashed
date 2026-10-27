@@ -134,6 +134,20 @@ class CaptureInterface:
             if n.endswith(".hc22000")
         )
 
+    def pcapng_files(self):
+        """Every rolling ``*.pcapng`` in the capture run dir (``.run``), sorted.
+        aircrack-ng cracks from these packet captures (the ``.hc22000`` store is
+        hashcat's format, which the Pi can't crack); the crack worker converts
+        them to classic pcap with tcpdump first."""
+        run_dir = os.path.join(self.store_dir, ".run")
+        try:
+            names = os.listdir(run_dir)
+        except OSError:
+            return []
+        return sorted(
+            os.path.join(run_dir, n) for n in names if n.endswith(".pcapng")
+        )
+
     def hashline_count(self):
         """Total hashlines across the store (append-only and exact-line deduped),
         i.e. the lifetime count of captured handshakes. Counts non-empty lines

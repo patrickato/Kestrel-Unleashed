@@ -153,6 +153,25 @@ How to use this file:
 - **Pick up when:** the e-ink face layout is next revised, or an operator asks
   for the cracked count on the panel.
 
+### aircrack-ng backend: no rules, uniform masks only
+
+- **What:** the crack worker moved from hashcat to aircrack-ng (hashcat can't run
+  on the Pi's pocl — see CHANGES). aircrack has no rule engine, so `[crack]
+  rules` is a no-op; and only **uniform** masks (`?d?d…`, `?H?H…`) map to a
+  `crunch` run — mixed-class or custom (`?1`) masks are skipped. `hashcat.py`
+  remains a dormant, still-tested module (for a possible GPU host).
+- **Why deferred:** aircrack covers the common cases (wordlists + the device-
+  default masks, which are uniform), and the Pi can't run hashcat anyway. Rules
+  and complex masks are a smaller slice of value.
+- **What to do:** for rules, pre-expand a small list with a rule engine off-box
+  or generate candidates and stream them into `aircrack-ng -w -`. For complex
+  masks, extend `aircrack.mask_to_crunch` to emit `crunch -t <template>` with
+  per-position charsets, or stream a generator. Consider John the Ripper jumbo
+  (wordlists + masks + rules, native CPU) if rules become important — it needs a
+  from-source build in the image.
+- **Pick up when:** an operator needs rules, or a device-default attack needs a
+  mask crunch can't express simply.
+
 ## WPS attacks (`kestrel wps` / reaver)
 
 ### Validate the attack end-to-end on hardware
