@@ -92,6 +92,15 @@
           # service, gated by the authorized-use ack. Lab / authorized use only.
           - reaver
           - pixiewps
+          # Kestrel-Unleashed: evil-portal (captive-portal rogue AP). hostapd
+          # runs the AP; dnsmasq-base is the DHCP/DNS binary WITHOUT the system
+          # service (we run our own instance with a generated conf, so the stock
+          # dnsmasq.service never grabs :53); iptables (nft-backed on bookworm)
+          # redirects :80 to the portal. Start-on-demand only, gated by the
+          # authorized-use ack. Lab / authorized use only.
+          - hostapd
+          - dnsmasq-base
+          - iptables
           # Kestrel-Unleashed: on-device kiosk for an attached HDMI touchscreen.
           # cage is a minimal single-app Wayland kiosk compositor; it runs
           # chromium full-screen on the dashboard. seatd hands cage the seat
@@ -1022,6 +1031,39 @@
       name: seatd.service
       enabled: yes
   ## END kestrel kiosk ##
+
+  ## START kestrel evil-portal (Kestrel-Unleashed) ##
+  # Evil-portal: a generic captive-portal rogue AP for AUTHORIZED assessments.
+  # The unit (from the systemd units task) is start-on-demand only -- it has no
+  # [Install] section, so it never auto-starts at boot. The launcher and the
+  # neutral default templates ship, but nothing runs until `kestrel evil-portal
+  # start`, which takes the authorized-use ack, takes over the capture dongle
+  # and pauses capture. Not validated end-to-end on hardware yet
+  # (docs/developer/deferred.md).
+  - name: install the kestrel evil-portal launcher
+    copy:
+      src: "{{ playbook_dir }}/files/evil-portal-launch.sh"
+      dest: /usr/local/lib/kestrel/evil-portal-launch
+      mode: '0755'
+
+  # One shell task, not a directory copy: a per-file `copy` starts Python under
+  # QEMU twice per file. These are the neutral defaults; operator templates in
+  # /etc/kestrel/evil-portal/templates/ override them at runtime.
+  - name: install the kestrel evil-portal default templates
+    shell: |
+      set -e
+      dst=/usr/local/share/kestrel/evil-portal/templates
+      mkdir -p "$dst"
+      cp {{ (playbook_dir ~ '/files/evil-portal/templates') | quote }}/* "$dst"/
+
+  - name: create the kestrel evil-portal state dir (pi-owned; captured submissions)
+    file:
+      path: /var/lib/kestrel/evil-portal
+      state: directory
+      owner: pi
+      group: pi
+      mode: '0750'
+  ## END kestrel evil-portal ##
 
   - name: Delete unnecessary large folder to save space (/root/.cache)
     file:

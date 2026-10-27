@@ -70,6 +70,13 @@ PWN_CRACK_SERVICE=kestrel-crack.service
 # touchscreen. Ships off; `kestrel kiosk enable` turns it on.
 PWN_KIOSK_SERVICE=kestrel-kiosk.service
 
+# Evil-portal (Kestrel-Unleashed): a generic captive-portal rogue AP for
+# authorized assessments. Ships off; `kestrel evil-portal start` runs it on the
+# capture dongle in AP mode (pausing capture). Captured submissions and the
+# operator's portal templates live under the evil-portal dir.
+PWN_EVIL_PORTAL_DIR=${PWN_EVIL_PORTAL_DIR:-$PWN_STATE_DIR/evil-portal}
+PWN_EVIL_PORTAL_SERVICE=kestrel-evil-portal.service
+
 # Defaults; /etc/default/kestrel overrides them. These code defaults are
 # the source of truth on an in-place (app-layer) update, which does not touch
 # /etc/default, so a new key MUST be given its default here, not only in
@@ -91,6 +98,17 @@ WIFI_BAND=2.4
 
 log() { echo "$*"; }
 die() { echo "error: $*" >&2; exit 1; }
+
+# Run a command as the pi user. A no-op when already pi; otherwise via runuser.
+# The pi-owned venv's Python must only ever run this way (never as root), so
+# lib scripts and the CLI that need the venv call `run_as_pi "$PWN_VENV_PYTHON"`.
+run_as_pi() {
+    if [ "$(id -un)" = pi ]; then
+        "$@"
+    else
+        runuser -u pi -- "$@"
+    fi
+}
 
 # Monotonic seconds since boot, for timing a window that must survive a
 # wall-clock correction. An RTC-less Pi boots with a stale clock and NTP can

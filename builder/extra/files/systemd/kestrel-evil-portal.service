@@ -1,0 +1,24 @@
+[Unit]
+Description=kestrel evil-portal captive-portal rogue AP (Kestrel-Unleashed; authorized use only)
+# Start-on-demand only: there is deliberately no [Install] section, so this
+# cannot be enabled to auto-start at boot. `kestrel evil-portal start` (which
+# takes the authorized-use acknowledgment) runs it; `stop` tears it down.
+# It takes over the capture dongle, so it conflicts with capture.
+After=kestrel-capture.service
+Conflicts=kestrel-capture.service
+
+[Service]
+Type=simple
+# Root: the launcher runs hostapd, dnsmasq and iptables and reconfigures the
+# interface. The portal HTTP server itself is dropped to pi inside the launcher
+# (runuser), so submitted data is written to the pi-owned evil-portal dir.
+ExecStart=/usr/local/lib/kestrel/evil-portal-launch
+# The launcher traps EXIT/INT/TERM and tears everything down (and restarts
+# capture) on stop, so a normal `systemctl stop` cleans up fully.
+KillMode=mixed
+TimeoutStopSec=30
+# An attack AP must not silently reappear: if the launcher fails, stay down.
+Restart=no
+
+[Install]
+# intentionally omitted -- never auto-started at boot

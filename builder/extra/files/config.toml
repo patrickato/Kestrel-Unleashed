@@ -295,6 +295,27 @@ pixie_dust = true
 # How long `kestrel wps scan` listens for WPS-enabled APs, in seconds.
 scan_seconds = 20
 
+# Evil-portal: a generic captive-portal rogue AP for AUTHORIZED assessments. It
+# stands up an open Wi-Fi on the capture dongle, answers all DNS to itself, and
+# serves a portal page (operator-supplied, or the neutral shipped default),
+# logging what clients submit. It TRANSMITS and takes over the dongle, so it is
+# CLI-driven (`kestrel evil-portal start`), takes the authorized-use
+# acknowledgment, and pauses capture while it runs. Start-on-demand only (never
+# auto-starts at boot). `enabled` is the launcher's gate, set by the CLI.
+# Templates: drop your own in /etc/kestrel/evil-portal/templates/ (keep the
+# form action="/login"); do NOT imitate a real company or its login.
+# Lab / authorized use only.
+[evil-portal]
+enabled = false
+# The open SSID to broadcast. A generic guest name; not a real network's name.
+ssid = "Guest WiFi"
+channel = 1
+# The portal's address; clients get a DHCP lease in the range below and all
+# their DNS resolves here.
+portal_ip = "10.0.0.1"
+dhcp_start = "10.0.0.10"
+dhcp_end = "10.0.0.250"
+
 # All reference plugins ship DISABLED. `kestrel plugins enable <name>`
 # shows the plugin's capabilities, takes the authorized-use acknowledgment for
 # any that leaves the device, and collects credentials before turning it on.

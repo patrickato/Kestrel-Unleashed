@@ -325,6 +325,22 @@ If an attack says "no key recovered", the AP is most likely WPS-locked (the scan
 
 ---
 
+## Evil-portal
+
+**Lab / authorized use only — this transmits and captures what people type.** Run it only against a network you own or are authorized to assess; it asks for the authorized-use acknowledgment first. Serve pages that are honestly your own — **do not** imitate a real company or its login.
+
+Evil-portal stands up a generic captive portal: an **open Wi-Fi** on the capture dongle, a catch-all DNS that points every lookup at the device, and a **portal page** — the one you supply, or a neutral built-in — that **logs every field** a client submits. It uses the capture dongle in AP mode (it must support AP mode) and **pauses capture** while it runs; it never starts on its own.
+
+```bash
+sudo kestrel evil-portal start     # open AP + portal (asks the ack, pauses capture)
+kestrel evil-portal creds          # what clients submitted
+sudo kestrel evil-portal stop      # tear down and resume capture
+```
+
+To use your own portal page, copy the templates to `/etc/kestrel/evil-portal/templates/` and edit them there (keep the form's `action="/login"`); that path overrides the shipped neutral defaults. Settings — the SSID, channel and address range — live in `[evil-portal]` in `config.toml`.
+
+---
+
 ## The on-device kiosk (HDMI touchscreen)
 
 If you've attached an HDMI touchscreen, the kiosk shows the dashboard full-screen on it at boot — a live, touch-operable console. It ships off; turn it on with:
@@ -707,6 +723,15 @@ This is the same mechanism as the first-boot Wi-Fi staging, and it works at any 
 | `kestrel wps scan [--seconds N]` | Scan for WPS-enabled APs (uses the dongle; pauses capture). |
 | `kestrel wps attack <BSSID> [--channel N] [--no-pixie] [--yes]` | Pixie-Dust / PIN attack; asks the authorized-use ack, pauses capture, saves a recovered key to loot. |
 | `kestrel wps list` | List WPS-recovered keys (also on the Loot page). |
+
+### Evil-portal
+
+| Command | What it does |
+| --- | --- |
+| `kestrel evil-portal start [--yes]` | Start the captive portal on the dongle (asks the authorized-use ack; pauses capture). |
+| `kestrel evil-portal stop` | Stop the portal and resume capture. |
+| `kestrel evil-portal status` | Service state, SSID, and how many submissions were captured. |
+| `kestrel evil-portal creds` | Show what clients submitted to the portal. |
 
 ### Kiosk
 

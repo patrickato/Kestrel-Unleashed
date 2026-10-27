@@ -172,3 +172,34 @@ How to use this file:
   `wps.py`, and tighten the regexes if the Kali/bookworm reaver differs.
 - **Pick up when:** a Pi + dongle + an authorized WPS AP are on hand.
 
+## Evil-portal (`kestrel evil-portal`)
+
+### Validate the rogue AP end-to-end on hardware
+
+- **What:** the portal server (`kestrel_pi/evilportal.py` — routing, probe
+  table, templates, cred store) is unit-tested, but the AP plumbing in
+  `evil-portal-launch` (hostapd + dnsmasq + the iptables `:80` redirect, the
+  interface reconfigure, the capture pause/restore) has **not** been run on a Pi
+  with the dongle in AP mode.
+- **Why deferred:** needs real hardware (a Pi, an AP-mode-capable dongle, a
+  client to join) the build/CI environment doesn't have.
+- **What to do:** on a device, `sudo kestrel evil-portal start`, join the SSID
+  from a phone, confirm the captive-portal sheet appears and a submission lands
+  in `kestrel evil-portal creds`; `stop` and confirm capture resumes and the
+  interface/iptables rule are cleaned up. Confirm `dnsmasq-base` + `hostapd`
+  behave as invoked (conf keys, foreground flags) on the bookworm versions.
+- **Pick up when:** a Pi + AP-capable dongle + a test client are on hand.
+
+### Show captured submissions on the dashboard
+
+- **What:** captured portal submissions are shown by `kestrel evil-portal creds`
+  (CLI) only; there is no web view, unlike crack loot on `/loot`.
+- **Why deferred:** submissions are plaintext credentials, so a web view must be
+  strictly auth-gated (like the wpa-sec "Show" page, only rendered when
+  `[web] auth` is on), which is more surface than the first cut warranted.
+- **What to do:** add an auth-gated `on_webhook`-style page or a dashboard card
+  that reads `evilportal.load_creds()` and renders it only when `[web] auth` is
+  not `none`, reusing the loot page's escaping and responsive-table conventions.
+- **Pick up when:** evil-portal is validated on hardware and an operator wants
+  the captures on the phone/kiosk rather than the terminal.
+

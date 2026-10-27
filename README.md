@@ -20,6 +20,7 @@ Kestrel is a small, battery-powered companion that sits nearby, listens to the W
 - **AngryOxide capture engine.** Capture runs on [AngryOxide](https://git.3ntropy.io/aluminum-ice/AngryOxide) over in-kernel `nl80211`/mac80211 drivers — no out-of-tree drivers or DKMS — on a dedicated USB adapter, so the built-in Wi-Fi and Bluetooth stay free for management.
 - **On-device quick-crack.** A niced, thermal-gated background worker cracks captured handshakes on the Pi itself with `hashcat -m 22000` against your wordlists (drop-in, auto-detected) — dictionaries, rules and brute-force masks — and shows the recovered password in cleartext on the web Loot page and the CLI. Local-only — it reads data you already captured, never the radio or network. (See [On-device quick-crack](#on-device-quick-crack-kestrel-unleashed).)
 - **WPS attacks.** `kestrel wps` runs reaver's offline Pixie-Dust (and online PIN) attack against a WPS-enabled AP; a recovered key lands in the same Loot store as cracked handshakes. CLI-driven, gated by the authorized-use acknowledgment, uses the capture dongle and pauses capture while it runs. (See [WPS attacks](#wps-attacks-kestrel-unleashed).)
+- **Evil-portal.** A generic captive-portal rogue AP for authorized assessments: an open SSID on the capture dongle, catch-all DNS, and an operator-supplied (or neutral shipped) portal page that logs what clients submit — not a kit of fake-brand pages. CLI-driven, gated by the authorized-use acknowledgment, pauses capture while it runs. (See [Evil-portal](#evil-portal-kestrel-unleashed).)
 - **On-device kiosk.** Optional full-screen, touch-operable dashboard on an attached HDMI screen at boot (chromium under cage). (See [On-device kiosk](#on-device-kiosk-kestrel-unleashed).)
 - **Reworked plugin host.** A small daemon hosts features as plugins. The `Plugin` base class and `on_*` hooks stay source-compatible with the pwnagotchi plugin API, with non-blocking off-loop dispatch, typed plugin context, capability and permission declarations, dependency ordering, hook-API versioning, and config validation with health reporting added on top.
 - **Mobile-first web dashboard.** A responsive, dark-mode-aware dashboard and control surface — server-rendered and dependency-free — shows live status and per-plugin readouts and drives capture, plugins and power from a phone. (See [Web interface](#web-interface).)
@@ -234,6 +235,22 @@ kestrel wps list                              # WPS-recovered keys (also on /loo
 ```
 
 Adds the `reaver`/`pixiewps` packages (**reflash-class**). Full guide, including the WPS-locked case: [`docs/user-guide/wps-attacks.md`](docs/user-guide/wps-attacks.md).
+
+## Evil-portal (Kestrel-Unleashed)
+
+> **Lab / authorized use only — this transmits and captures what people type.** Serve pages that are honestly your own; **do not** imitate a real company or its login. `kestrel evil-portal start` asks for the authorized-use acknowledgment first.
+
+A generic **captive-portal framework**, not a kit of fake-brand pages. It broadcasts an open SSID on the capture dongle, hands out DHCP, answers **all DNS** to itself, and serves a portal page — the one you supply in `/etc/kestrel/evil-portal/templates/`, or a neutral built-in — **logging every field** a client submits. Enough to show, in an authorized test, that users will join an open network and sign in to its portal.
+
+It uses the **capture dongle** in AP mode (it must support AP mode) and **pauses capture** while it runs; it is **start-on-demand only** and never auto-starts at boot.
+
+```bash
+sudo kestrel evil-portal start     # open AP + portal (asks the ack, pauses capture)
+kestrel evil-portal creds          # what clients submitted
+sudo kestrel evil-portal stop      # tear down, resume capture
+```
+
+Adds `hostapd`/`dnsmasq-base`/`iptables` (**reflash-class**). Full guide, templates and the no-impersonation rule: [`docs/user-guide/evil-portal.md`](docs/user-guide/evil-portal.md).
 
 ## On-device kiosk (Kestrel-Unleashed)
 

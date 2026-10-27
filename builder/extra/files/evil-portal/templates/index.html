@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guest Wi-Fi</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 0;
+         background: #f4f5f7; color: #1a1a1a; }
+  @media (prefers-color-scheme: dark) { body { background: #16181d; color: #e8e8e8; } }
+  .card { max-width: 24rem; margin: 3rem auto; padding: 1.5rem;
+          background: #fff; border-radius: .8rem; box-shadow: 0 1px 6px rgba(0,0,0,.12); }
+  @media (prefers-color-scheme: dark) { .card { background: #222630; box-shadow: none; } }
+  h1 { font-size: 1.4rem; margin: 0 0 .3rem; }
+  p  { margin: .3rem 0 1rem; opacity: .8; font-size: .95rem; }
+  label { display: block; font-size: .85rem; margin: .7rem 0 .2rem; }
+  input { font-size: 1rem; padding: .7rem; width: 100%; box-sizing: border-box;
+          border: 1px solid #c7c9cf; border-radius: .4rem; background: inherit; color: inherit; }
+  button { font-size: 1rem; padding: .8rem; width: 100%; margin-top: 1.2rem;
+           background: #1565c0; color: #fff; border: 0; border-radius: .4rem; cursor: pointer; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Guest Wi-Fi</h1>
+    <p>Sign in to connect to this network.</p>
+    <!-- Posts to /login. Every submitted field is captured. This is a NEUTRAL
+         placeholder: do not alter it to imitate a real company or its login. -->
+    <form method="post" action="/login">
+      <label for="u">Username or email</label>
+      <input id="u" name="username" autocomplete="username" autocapitalize="off">
+      <label for="p">Password</label>
+      <input id="p" name="password" type="password" autocomplete="current-password">
+      <button type="submit">Connect</button>
+    </form>
+  </div>
+</body>
+</html>

@@ -27,6 +27,9 @@ kestrel-agent-train = "kestrel_pi.agent.train:main"
 # Kestrel-Unleashed: the on-device quick-crack worker runs in its own process
 # (keeps the hashcat child and its CPU budget off the always-on daemon).
 kestrel-crack = "kestrel_pi.crack.controller:main"
+# Kestrel-Unleashed: the evil-portal captive-portal HTTP server (run as pi by
+# the evil-portal launcher; the rogue-AP plumbing stays in the launcher).
+kestrel-evilportal = "kestrel_pi.evilportal:main"
 
 [tool.setuptools.packages.find]
 include = ["kestrel_pi*"]

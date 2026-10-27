@@ -74,6 +74,11 @@ Usage: $PROG <command>
                      Pixie-Dust / PIN attack on a WPS AP; asks the authorized-use
                      ack, pauses capture, and saves a recovered key to loot
   wps list           List WPS-recovered keys
+  evil-portal        Evil-portal status (captive-portal rogue AP; authorized use only)
+  evil-portal start [--yes]  Start the captive portal on the dongle; asks the
+                     authorized-use ack and pauses capture
+  evil-portal stop   Stop the portal (capture resumes)
+  evil-portal creds  Show what clients submitted to the portal
   kiosk              Kiosk status (dashboard full-screen on an HDMI touchscreen)
   kiosk enable [--url URL]   Show the dashboard full-screen on the HDMI screen
   kiosk disable      Turn the kiosk off
@@ -943,14 +948,6 @@ BACKUP_KEY_DEFAULT=/home/pi/.ssh/id_ed25519
 
 # Run a command as the pi account (the user the daemon copies as). Already pi:
 # run it directly. Otherwise drop to pi with runuser, which needs root.
-run_as_pi() {
-    if [ "$(id -un)" = pi ]; then
-        "$@"
-    else
-        runuser -u pi -- "$@"
-    fi
-}
-
 # Run rsync (as pi) with a few retries: a flaky BT-PAN/Wi-Fi tether drops a
 # transfer mid-stream, and --partial keeps the progress so a retry resumes it
 # rather than restarting. Prints the final attempt's combined output; returns
@@ -2025,6 +2022,65 @@ cmd_wps() {
     esac
 }
 
+## evil-portal (captive-portal rogue AP; authorized use only) ###############
+# Stands up a generic captive portal on the capture dongle: an open SSID, a
+# catch-all DNS, and an operator-supplied (or neutral shipped) portal page that
+# logs what clients submit. It TRANSMITS and takes over the dongle, so it is
+# CLI-driven, takes the authorized-use ack, and pauses capture while it runs.
+
+cmd_evil_portal_status() {
+    echo "evil-portal:"
+    echo "  service: $(systemctl is-active "$PWN_EVIL_PORTAL_SERVICE" 2>/dev/null || echo inactive)"
+    echo "  config:  ssid=$(cfg evil-portal.ssid "Guest WiFi") channel=$(cfg evil-portal.channel 1) portal_ip=$(cfg evil-portal.portal_ip 10.0.0.1)"
+    local creds="$PWN_EVIL_PORTAL_DIR/creds.jsonl" n=0
+    [ -f "$creds" ] && n=$(grep -c . "$creds" 2>/dev/null || echo 0)
+    echo "  captured submissions: $n"
+}
+
+cmd_evil_portal_start() {
+    need_root
+    command -v hostapd >/dev/null 2>&1 || die "hostapd not installed"
+    command -v dnsmasq >/dev/null 2>&1 || die "dnsmasq not installed"
+    local yes=no
+    while [ $# -gt 0 ]; do
+        case "$1" in --yes|-y) yes=yes; shift ;; *) die "unknown option: $1" ;; esac
+    done
+    capture_ack "$yes" || { log "not acknowledged; aborting"; return 1; }
+    # The launcher reads [evil-portal] enabled as its gate.
+    config_set evil-portal enabled true
+    systemctl start "$PWN_EVIL_PORTAL_SERVICE"
+    log "evil-portal started: SSID '$(cfg evil-portal.ssid "Guest WiFi")' on the capture dongle (capture paused)"
+    log "captured submissions: kestrel evil-portal creds"
+}
+
+cmd_evil_portal_stop() {
+    need_root
+    systemctl stop "$PWN_EVIL_PORTAL_SERVICE" 2>/dev/null || true
+    config_set evil-portal enabled false
+    log "evil-portal stopped (capture resumes if it was running)"
+}
+
+cmd_evil_portal_creds() {
+    local creds="$PWN_EVIL_PORTAL_DIR/creds.jsonl"
+    PWN_CREDS="$creds" run_as_pi "$PWN_VENV_PYTHON" -I -c '
+import os
+from kestrel_pi import evilportal
+print(evilportal.format_creds(evilportal.load_creds(os.environ["PWN_CREDS"])))
+'
+}
+
+cmd_evil_portal() {
+    [ $# -gt 0 ] || { cmd_evil_portal_status; return; }
+    local sub=$1; shift
+    case "$sub" in
+        status) cmd_evil_portal_status ;;
+        start) cmd_evil_portal_start "$@" ;;
+        stop) cmd_evil_portal_stop ;;
+        creds) cmd_evil_portal_creds ;;
+        *) die "unknown 'evil-portal' subcommand: $sub (status|start|stop|creds)" ;;
+    esac
+}
+
 ## remote-train (offload agent training to a desktop host) #################
 # The `remote-train` plugin trains the learning agent on a more powerful Linux
 # host over SSH, using the pi account's key (reused from backup by default, just
@@ -2537,6 +2593,7 @@ main() {
         capture) cmd_capture "$@" ;;
         crack) cmd_crack "$@" ;;
         wps) cmd_wps "$@" ;;
+        evil-portal) cmd_evil_portal "$@" ;;
         kiosk) cmd_kiosk "$@" ;;
         plugins) cmd_plugins "$@" ;;
         web) cmd_web "$@" ;;

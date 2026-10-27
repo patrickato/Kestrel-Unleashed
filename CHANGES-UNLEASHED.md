@@ -121,6 +121,36 @@ force as a `--no-pixie` fallback).
 flashed image, not an app-layer update. The radio orchestration is not yet
 validated end-to-end on hardware (see `docs/developer/deferred.md`).
 
+### Added: evil-portal (captive-portal rogue AP)
+A generic captive-portal **framework** for authorized Wi-Fi assessments — not a
+kit of fake-brand pages. It broadcasts an open SSID on the capture dongle,
+answers all DNS to itself, redirects web traffic to a portal page (operator
+template or a neutral shipped default), and logs what clients submit.
+
+- `builder/config.yml`: adds `hostapd`, `dnsmasq-base` (the binary without the
+  stock system service, so it can't grab `:53`) and `iptables`; installs the
+  launcher, the neutral default templates, and a pi-owned state dir.
+- `builder/extra/files/config.toml`: new `[evil-portal]` table (`ssid`,
+  `channel`, `portal_ip`, DHCP range) — defaults only. One new table.
+- `kestrel_pi/evilportal.py` (new, stdlib-only, unit-tested): the portal HTTP
+  server's request routing, the OS-probe URL table, template loading (with a
+  neutral built-in fallback), and the captured-submission store.
+- `builder/extra/files/evil-portal/templates/`: neutral `index.html` /
+  `done.html` with a README spelling out the **no-impersonation** rule.
+- `evil-portal-launch` + `kestrel-evil-portal.service`: the rogue-AP plumbing
+  (hostapd + dnsmasq + an iptables :80 redirect; the portal runs as pi on
+  :8880). The unit is **start-on-demand only** — it has no `[Install]` section,
+  so it never auto-starts at boot. Capture is paused for the run and resumed on
+  stop.
+- CLI `kestrel evil-portal {start,stop,status,creds}`: CLI-driven, gated by the
+  authorized-use acknowledgment (it transmits and takes over the dongle). See
+  `docs/user-guide/evil-portal.md`.
+- `run_as_pi` moved from the CLI into `common.sh` so the launcher can drop the
+  portal server to pi the standard way (enforced by `test_root_python.py`).
+
+**Release impact: reflash-class** (adds apt packages). The AP orchestration is
+not yet validated end-to-end on hardware (see `docs/developer/deferred.md`).
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,
