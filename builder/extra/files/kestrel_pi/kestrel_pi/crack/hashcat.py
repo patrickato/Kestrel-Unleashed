@@ -53,6 +53,29 @@ def build_crack_cmd(hashfile, wordlist, potfile, rules=(), nice=15, workload=1):
     return cmd
 
 
+def build_mask_cmd(hashfile, mask, potfile, nice=15, workload=1):
+    """argv for a brute-force **mask** attack (``-a 3``) of ``hashfile`` over
+    ``mask`` (e.g. ``?d?d?d?d?d?d?d?d`` = every 8-digit key). Brute force is the
+    way to catch an all-numeric router default a wordlist can't hold. Same nice/
+    workload bounds and shared potfile as the dictionary path; results are read
+    back with :func:`build_show_cmd`."""
+    cmd = []
+    try:
+        nice = max(0, min(19, int(nice)))
+    except (TypeError, ValueError):
+        nice = 15
+    if nice:
+        cmd += ["nice", "-n", str(nice)]
+    try:
+        workload = max(1, min(4, int(workload)))
+    except (TypeError, ValueError):
+        workload = 1
+    cmd += [HASHCAT, "-m", MODE, "-a", "3", "--quiet",
+            "--potfile-path", str(potfile), "-w", str(workload),
+            str(hashfile), str(mask)]
+    return cmd
+
+
 def build_show_cmd(hashfile, potfile):
     """argv to list which lines of ``hashfile`` are cracked in ``potfile``.
 

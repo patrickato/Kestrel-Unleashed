@@ -42,6 +42,7 @@ def _config(tmp_path, wordlists_dir, **over):
              'wordlists_dir = "%s"' % wordlists_dir,
              'order = "%s"' % conf["order"],
              "rules = %s" % ("[" + ", ".join('"%s"' % r for r in conf["rules"]) + "]"),
+             "masks = %s" % ("[" + ", ".join('"%s"' % m for m in conf["masks"]) + "]"),
              "nice = %d" % conf["nice"],
              "workload = %d" % conf["workload"],
              "max_temp_c = %d" % conf["max_temp_c"],
@@ -275,6 +276,55 @@ def test_disabled_and_no_wordlists(tmp_path):
     os.makedirs(os.path.join(d, "wordlists_empty"), exist_ok=True)
     w2 = _worker(tmp_path, cfg_on, FakeHashcat())
     assert w2.run_once()[0] == "no-wordlists"
+
+
+# --- mask / brute-force attacks ---------------------------------------------
+
+def test_build_mask_cmd_and_attacks():
+    cmd = hashcat.build_mask_cmd("/h", "?d?d?d?d", "/pot", nice=15, workload=2)
+    assert "-a" in cmd and cmd[cmd.index("-a") + 1] == "3"   # mask mode
+    assert cmd[-2:] == ["/h", "?d?d?d?d"] and "22000" in cmd
+    # build_attacks: wordlists (dict) first, masks (mask) last
+    wls = [{"name": "s.txt", "sig": "s:1:1", "path": "/s", "size": 1}]
+    attacks = store_mod.build_attacks(wls, ["?d?d", "?l?l"])
+    assert [a["kind"] for a in attacks] == ["dict", "mask", "mask"]
+    assert attacks[0]["path"] == "/s"                        # wordlist fields kept
+    assert attacks[1]["sig"] == "mask:?d?d" and attacks[1]["mask"] == "?d?d"
+
+
+def test_masks_run_after_wordlists(tmp_path):
+    d = str(tmp_path)
+    _write(os.path.join(d, "wordlists", "small.txt"), "nope\n")   # won't crack it
+    _write(os.path.join(d, "capture", "nets.hc22000"), _hashline(AP1, "HomeWiFi") + "\n")
+    cfg = _config(d, os.path.join(d, "wordlists"), masks=["?d?d?d?d?d?d?d?d"])
+    fake = FakeHashcat(cracks={"?d?d?d?d?d?d?d?d": {AP1C: "12345678"}})
+    worker = _worker(tmp_path, cfg, fake)
+    import kestrel_pi.crack.controller as ctl
+    ctl.hc.have_hashcat = lambda: True
+
+    worker.run_once()                       # wordlist pass first — no crack
+    assert worker.loot.load()[AP1C]["status"] == "pending"   # mask still untried
+    worker.run_once()                       # mask pass — cracks it
+    rec = worker.loot.load()[AP1C]
+    assert rec["status"] == "cracked" and rec["password"] == "12345678"
+    assert rec["cracked_wordlist"] == "?d?d?d?d?d?d?d?d"
+
+
+def test_manual_mask_job(tmp_path):
+    d = str(tmp_path)
+    _write(os.path.join(d, "wordlists", "small.txt"), "x\n")
+    capfile = os.path.join(d, "capture", "nets.hc22000")
+    _write(capfile, _hashline(AP1, "HomeWiFi") + "\n")
+    cfg = _config(d, os.path.join(d, "wordlists"))
+    fake = FakeHashcat(cracks={"?d?d?d?d": {AP1C: "4815"}})
+    worker = _worker(tmp_path, cfg, fake)
+    import kestrel_pi.crack.controller as ctl
+    ctl.hc.have_hashcat = lambda: True
+    store_mod.enqueue_job(worker.crack_dir, [capfile], mask="?d?d?d?d", label="pin")
+    worker.run_once()
+    rec = worker.loot.load()[AP1C]
+    assert rec["status"] == "cracked" and rec["password"] == "4815"
+    assert store_mod.queue_len(worker.crack_dir) == 0
 
 
 # --- readout ----------------------------------------------------------------

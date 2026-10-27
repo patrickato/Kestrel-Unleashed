@@ -68,6 +68,7 @@ CRACK_DEFAULTS = {
     "wordlists_dir": DEFAULT_WORDLISTS_DIR,
     "order": "size",
     "rules": [],
+    "masks": [],
     "nice": 15,
     "workload": 1,
     "max_temp_c": 75,

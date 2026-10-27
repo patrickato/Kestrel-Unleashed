@@ -90,6 +90,9 @@ def widget_elements(status, now=None):
                          "kind": "number"})
     elements.append({"name": "wordlists", "label": "Wordlists",
                      "value": str(int(status.get("wordlists") or 0)), "kind": "number"})
+    if status.get("masks"):
+        elements.append({"name": "masks", "label": "Masks",
+                         "value": str(int(status.get("masks") or 0)), "kind": "number"})
     if status.get("queue"):
         elements.append({"name": "queue", "label": "Queued jobs",
                          "value": str(int(status.get("queue") or 0)), "kind": "number"})

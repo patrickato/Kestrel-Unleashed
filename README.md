@@ -197,7 +197,10 @@ kestrel crack show HomeWiFi             # full loot for one network (ESSID or BS
 kestrel crack wordlists                 # the wordlists on the device, in the order tried
 kestrel crack run HomeWiFi.hc22000 --wordlist rockyou.txt   # re-run one capture against a bigger list
 kestrel crack run NetA.hc22000 NetB.hc22000                 # multiple files; --wordlist omitted = all lists
+kestrel crack run HomeWiFi.hc22000 --mask '?d?d?d?d?d?d?d?d'   # brute-force every 8-digit router key
 ```
+
+Beyond wordlists, a brute-force **mask** attack (`hashcat -a 3`) catches a random all-numeric router default that no wordlist holds. A mask runs for hours on the Pi, so it's off in auto-crack by default (`[crack] masks`) and best aimed at one target at a time, from the CLI above or the Loot page's mask box.
 
 The web **Loot** page (dashboard → *Loot*, with `[web] auth` on) shows the same loot and lets you tick several capture files and queue them against a chosen wordlist or ruleset — the easy way to throw a bigger list at whatever hasn't cracked yet, from a phone or the device's own screen.
 

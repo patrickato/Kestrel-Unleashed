@@ -62,9 +62,10 @@ Usage: $PROG <command>
   crack list [FILTER]   List loot (recovered passwords in cleartext)
   crack show Q       Full loot for the network(s) matching an ESSID or BSSID
   crack wordlists    List the wordlists on the device (in the order tried)
-  crack run FILE... [--wordlist NAME|all] [--rules NAME]...   Queue a manual
-                     crack of one or more capture files (re-run what didn't crack
-                     against another wordlist/ruleset); omit --wordlist for all
+  crack run FILE... [--wordlist NAME|all | --mask '?d?d?d?d?d?d?d?d'] [--rules NAME]...
+                     Queue a manual crack of one or more capture files (re-run
+                     what didn't crack against another wordlist/ruleset, or a
+                     brute-force mask); omit --wordlist for all lists
   crack enable       Enable quick-crack (auto-crack new handshakes); disable to stop
   crack clear --yes  Clear the loot store (captures and wordlists untouched)
   plugins            Plugin menu (list, info, enable, disable)
@@ -1708,17 +1709,18 @@ for w in ls:
 }
 
 cmd_crack_run() {
-    local wordlist="" wd f r w
+    local wordlist="" mask="" wd f r w
     local files=() rules=() resolved=() rpaths=() wls=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --wordlist|-w) wordlist=$2; shift 2 ;;
+            --mask|-m) mask=$2; shift 2 ;;
             --rules|-r) rules+=("$2"); shift 2 ;;
             --*) die "unknown option for 'crack run': $1" ;;
             *) files+=("$1"); shift ;;
         esac
     done
-    [ "${#files[@]}" -gt 0 ] || die "usage: $PROG crack run <file.hc22000>... [--wordlist NAME|all] [--rules NAME]..."
+    [ "${#files[@]}" -gt 0 ] || die "usage: $PROG crack run <file.hc22000>... [--wordlist NAME|all | --mask '?d?d?d?d?d?d?d?d'] [--rules NAME]..."
     wd=$(cfg crack.wordlists_dir "$PWN_WORDLISTS_DIR")
     # Resolve the capture files (a bare name is looked up in the store).
     for f in "${files[@]}"; do
@@ -1726,6 +1728,20 @@ cmd_crack_run() {
         elif [ -f "$PWN_CAPTURE_DIR/$f" ]; then resolved+=("$PWN_CAPTURE_DIR/$f")
         else die "no such capture file: $f (looked in . and $PWN_CAPTURE_DIR)"; fi
     done
+    # A brute-force MASK job (one job; no wordlist). Deliberate deep attack on a
+    # chosen target -- e.g. --mask '?d?d?d?d?d?d?d?d' for every 8-digit key.
+    if [ -n "$mask" ]; then
+        run_as_pi "$PWN_VENV_PYTHON" -I -c '
+import sys
+from kestrel_pi.crack import store
+crack_dir, m, nf = sys.argv[1], sys.argv[2], int(sys.argv[3])
+files = sys.argv[4:4 + nf]
+store.enqueue_job(crack_dir, files, mask=m, label="manual-mask")
+' "$PWN_CRACK_DIR" "$mask" "${#resolved[@]}" "${resolved[@]}"
+        log "queued a mask job ($mask) over ${#resolved[@]} file(s); a brute force can take hours on the Pi"
+        [ "$(cfg crack.enabled true)" = true ] || log "note: quick-crack is disabled; run 'sudo $PROG crack enable' to process the queue"
+        return 0
+    fi
     # One named wordlist, or every available list (smallest-first).
     if [ -n "$wordlist" ] && [ "$wordlist" != all ]; then
         if [ -f "$wordlist" ]; then wls+=("$(readlink -f "$wordlist")")

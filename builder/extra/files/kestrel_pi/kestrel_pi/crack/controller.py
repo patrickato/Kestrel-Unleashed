@@ -149,18 +149,30 @@ class CrackWorker:
                 handle.write(line.rstrip("\n") + "\n")
         return path
 
-    def _crack(self, lines, wordlist, conf, rules=()):
-        """Run one hashcat pass over ``lines`` with ``wordlist`` (+ rules) and
-        return ``{bssid: password}`` for everything cracked (read back via
-        ``--show`` against the shared potfile, not scraped from stdout)."""
-        if not lines or not os.path.isfile(wordlist):
+    def _run_attack(self, lines, attack, conf, rules=()):
+        """Run one hashcat pass (``attack`` is a dict- or mask-attack from
+        :func:`.store.build_attacks`) over ``lines`` and return ``{bssid:
+        password}`` for everything cracked (read back via ``--show`` against the
+        shared potfile, not scraped from stdout). ``rules`` apply to a dictionary
+        attack only."""
+        kind = attack.get("kind", "dict")
+        if not lines:
+            return {}
+        if kind == "dict" and not os.path.isfile(attack.get("path", "")):
+            return {}
+        if kind == "mask" and not attack.get("mask"):
             return {}
         hashfile = self._materialize(lines)
         try:
             budget = int(conf.get("max_job_seconds") or 0) or None
-            cmd = hc.build_crack_cmd(hashfile, wordlist, self.potfile, rules=rules,
-                                     nice=conf.get("nice", 15),
-                                     workload=conf.get("workload", 1))
+            if kind == "mask":
+                cmd = hc.build_mask_cmd(hashfile, attack["mask"], self.potfile,
+                                        nice=conf.get("nice", 15),
+                                        workload=conf.get("workload", 1))
+            else:
+                cmd = hc.build_crack_cmd(hashfile, attack["path"], self.potfile,
+                                         rules=rules, nice=conf.get("nice", 15),
+                                         workload=conf.get("workload", 1))
             rc, _out, err = self._runner(cmd, timeout=budget)
             if rc not in (0, 1, 124):  # 0 cracked, 1 exhausted, 124 our timeout
                 log.warning("hashcat exited %s: %s", rc, (err or "").strip()[:200])
@@ -188,7 +200,9 @@ class CrackWorker:
             LootStore.upsert(aps, target, now=self._clock())
         wordlists = wl_mod.discover(conf.get("wordlists_dir"),
                                     conf.get("order", "size"))
-        all_sigs = {wl["sig"] for wl in wordlists}
+        masks = [str(m).strip() for m in (conf.get("masks") or []) if str(m).strip()]
+        attacks = store_mod.build_attacks(wordlists, masks)
+        all_sigs = {a["sig"] for a in attacks}
         rules = wl_mod.resolve_rules(conf.get("rules"), conf.get("wordlists_dir"))
         recrack = bool(conf.get("recrack_on_new_wordlist", True))
 
@@ -202,17 +216,17 @@ class CrackWorker:
             if jobs:
                 state, current = "cracking", self._run_manual(jobs[0], aps, rules, conf)
                 did_work = True
-            elif not wordlists:
+            elif not attacks:
                 state = "no-wordlists"
             else:
-                batch = store_mod.next_auto_batch(aps, targets, wordlists, recrack)
+                batch = store_mod.next_auto_batch(aps, targets, attacks, recrack)
                 if batch is not None:
                     state, current = "cracking", self._run_auto(batch, aps, rules, conf)
                     did_work = True
 
         LootStore.refresh_statuses(aps, all_sigs)
         self.loot.save(aps)
-        self._write_status(aps, conf, wordlists, state, current)
+        self._write_status(aps, conf, wordlists, masks, state, current)
         return state, did_work
 
     def _all_events(self):
@@ -222,13 +236,13 @@ class CrackWorker:
         return events
 
     def _run_auto(self, batch, aps, rules, conf):
-        wl, tgts = batch
+        attack, tgts = batch
         lines = []
         for target in tgts:
             for line in target["lines"]:
                 if line not in lines:
                     lines.append(line)
-        cracked = self._crack(lines, wl["path"], conf, rules=rules)
+        cracked = self._run_attack(lines, attack, conf, rules=rules)
         now = self._clock()
         for target in tgts:
             bssid = target["bssid"].upper()
@@ -236,15 +250,22 @@ class CrackWorker:
             if rec is None:
                 continue
             if bssid in cracked:
-                LootStore.mark_cracked(rec, cracked[bssid], wl["name"], now=now)
+                LootStore.mark_cracked(rec, cracked[bssid], attack["name"], now=now)
             else:
-                LootStore.mark_tried(rec, wl["sig"])
+                LootStore.mark_tried(rec, attack["sig"])
         return {"essid": tgts[0].get("essid"), "bssid": tgts[0].get("bssid"),
-                "wordlist": wl["name"], "origin": "auto", "started": now}
+                "wordlist": attack["name"], "origin": "auto", "started": now}
 
     def _run_manual(self, job_entry, aps, default_rules, conf):
         path, job = job_entry
+        mask = (job.get("mask") or "").strip()
         wordlist = job.get("wordlist") or ""
+        if mask:
+            attack = {"kind": "mask", "name": mask, "mask": mask,
+                      "sig": store_mod.mask_sig(mask)}
+        else:
+            attack = {"kind": "dict", "name": os.path.basename(wordlist),
+                      "path": wordlist, "sig": self._wordlist_sig(wordlist)}
         files = [f for f in (job.get("files") or []) if os.path.isfile(f)]
         rules = wl_mod.resolve_rules(job.get("rules"), conf.get("wordlists_dir")) \
             or default_rules
@@ -259,24 +280,20 @@ class CrackWorker:
             for line in target["lines"]:
                 if line not in lines:
                     lines.append(line)
-        cracked = self._crack(lines, wordlist, conf, rules=rules) if (lines and
-                  os.path.isfile(wordlist)) else {}
+        cracked = self._run_attack(lines, attack, conf, rules=rules) if lines else {}
         now = self._clock()
-        sig = self._wordlist_sig(wordlist)
         for target in targets:
             bssid = target["bssid"].upper()
             rec = aps.get(bssid)
             if rec is None:
                 continue
             if bssid in cracked:
-                LootStore.mark_cracked(rec, cracked[bssid],
-                                       os.path.basename(wordlist), now=now)
-            elif sig:
-                LootStore.mark_tried(rec, sig)
+                LootStore.mark_cracked(rec, cracked[bssid], attack["name"], now=now)
+            elif attack["sig"]:
+                LootStore.mark_tried(rec, attack["sig"])
         store_mod.remove_job(path)
-        return {"essid": job.get("label") or os.path.basename(wordlist),
-                "bssid": "", "wordlist": os.path.basename(wordlist),
-                "origin": "manual", "started": now}
+        return {"essid": job.get("label") or attack["name"], "bssid": "",
+                "wordlist": attack["name"], "origin": "manual", "started": now}
 
     @staticmethod
     def _wordlist_sig(path):
@@ -287,7 +304,7 @@ class CrackWorker:
         return "%s:%d:%d" % (os.path.basename(path), st.st_size, int(st.st_mtime))
 
     # -- status -----------------------------------------------------------
-    def _write_status(self, aps, conf, wordlists, state, current):
+    def _write_status(self, aps, conf, wordlists, masks, state, current):
         counts = LootStore.counts(aps)
         last = None
         for rec in aps.values():
@@ -304,6 +321,7 @@ class CrackWorker:
             "pending": counts["pending"],
             "exhausted": counts["exhausted"],
             "wordlists": len(wordlists),
+            "masks": len(masks or []),
             "queue": store_mod.queue_len(self.crack_dir),
             "temp_c": self._temp(),
             "current": current,
@@ -321,10 +339,12 @@ class CrackWorker:
             if conf.get("enabled", True) and hc.have_hashcat():
                 if not self.thermal_ok(conf, resuming=paused):
                     paused = True
+                    masks = [str(m).strip() for m in (conf.get("masks") or [])
+                             if str(m).strip()]
                     self._write_status(self.loot.load(), conf,
                                        wl_mod.discover(conf.get("wordlists_dir"),
                                                        conf.get("order", "size")),
-                                       "paused-thermal", None)
+                                       masks, "paused-thermal", None)
                     time.sleep(THERMAL_SLEEP)
                     continue
                 paused = False

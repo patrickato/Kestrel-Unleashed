@@ -79,6 +79,14 @@ and shows the recovered password in cleartext.
 script / service), so it ships on a freshly flashed image, not an app-layer
 update.
 
+### Added: brute-force mask attacks
+The crack worker now runs hashcat **mask** attacks (`-a 3`) as well as
+dictionaries, for the random all-numeric router keys no wordlist holds. A unified
+attack model (wordlists then masks) drives both the auto and manual paths;
+`[crack] masks` is empty by default (a brute force is a multi-hour commitment),
+and a mask is normally aimed at one target with `kestrel crack run <file> --mask
+'?d?d?d?d?d?d?d?d'` or the Loot page's mask box.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

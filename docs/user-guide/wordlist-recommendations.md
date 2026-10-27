@@ -116,6 +116,32 @@ rockyou-30000 for an occasional deep dig on a small base.** Set one with:
 rules = ["best64.rule"]
 ```
 
+## Brute-force masks (the one thing wordlists can't catch)
+
+A random all-numeric router default like `81736402` is in no wordlist, but a
+**mask** attack walks every combination and *will* find it. Masks run on the
+device too (`hashcat -a 3`), after every wordlist (the deepest tier):
+
+- `?d` digit, `?l` lower, `?u` upper, `?s` symbol, `?a` any.
+- The highest-value WPA mask is **all-8-digit**: `?d?d?d?d?d?d?d?d` (10⁸ = 100M
+  candidates, ≈ 18 hours per network on the Pi CPU). 10-digit phone-style
+  (`?d?d?d?d?d?d?d?d?d?d`) is 100× that — so pick your targets.
+
+Because a mask is a multi-hour commitment, auto-crack ships with **no masks**
+(`[crack] masks = []`). Two ways to use one:
+
+- **On a chosen target** (recommended): queue it where it's worth the time, from
+  the Loot page's mask box or the CLI —
+  ```bash
+  kestrel crack run <file>.hc22000 --mask '?d?d?d?d?d?d?d?d'
+  ```
+- **Automatically, after the wordlists**: add masks to `config.toml` —
+  ```toml
+  [crack]
+  masks = ["?d?d?d?d?d?d?d?d"]
+  ```
+  Only if you're happy for the Pi to spend many hours per network on brute force.
+
 ## Putting it together — best chances, fastest
 
 1. Drop in **`probable-v2-wpa-top4800.txt`** and **`rockyou.txt` (8+ filtered)**

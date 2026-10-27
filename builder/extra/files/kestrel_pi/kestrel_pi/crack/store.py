@@ -161,32 +161,52 @@ class LootStore:
         return out
 
 
-def next_auto_batch(aps, targets, wordlists, recrack_on_new=True):
-    """The next unit of automatic work: the first wordlist (in ``wordlists``
-    order) that has at least one uncracked target which has not tried it, paired
-    with every such target.
+def mask_sig(mask):
+    """A stable tried-set signature for a brute-force mask (deterministic, so it
+    never needs re-running once tried)."""
+    return "mask:" + str(mask).strip()
 
-    Wordlist-first, not target-first, on purpose: one hashcat run loads the
-    wordlist once and tests every outstanding target against it, so the quick
-    wins across all APs land before the next (bigger) wordlist is even opened.
-    Returns ``(wordlist, [target, ...])`` or ``None`` when there is nothing left
-    to try. ``targets`` are capture targets; a target with no loot record (no
-    BSSID) is skipped."""
+
+def build_attacks(wordlists, masks=()):
+    """The ordered attack list the worker runs: every wordlist (as a ``dict``
+    attack, smallest-first) then every mask (as a ``mask`` attack, last — brute
+    force is the deepest, slowest tier). Each attack carries ``kind``, ``name``,
+    ``sig`` and either ``path`` (dict) or ``mask``."""
+    attacks = [dict(w, kind="dict") for w in (wordlists or ())]
+    for mask in masks or ():
+        mask = str(mask).strip()
+        if mask:
+            attacks.append({"kind": "mask", "name": mask, "mask": mask,
+                            "sig": mask_sig(mask)})
+    return attacks
+
+
+def next_auto_batch(aps, targets, attacks, recrack_on_new=True):
+    """The next unit of automatic work: the first attack (in ``attacks`` order)
+    that has at least one uncracked target which has not tried it, paired with
+    every such target.
+
+    Attack-first, not target-first, on purpose: one hashcat run loads the attack
+    once and tests every outstanding target against it, so the quick wins across
+    all APs land before the next (bigger) attack is even opened. Returns
+    ``(attack, [target, ...])`` or ``None`` when there is nothing left to try.
+    ``attacks`` come from :func:`build_attacks` (wordlists then masks); a target
+    with no loot record (no BSSID) is skipped."""
     by_bssid = {}
     for target in targets:
         bssid = (target.get("bssid") or "").upper()
         if bssid:
             by_bssid.setdefault(bssid, target)
-    for wl in wordlists:
+    for attack in attacks:
         batch = []
         for bssid, target in by_bssid.items():
             rec = aps.get(bssid)
             if rec is None or rec.get("password"):
                 continue
-            if not _tried_has(rec, wl, recrack_on_new):
+            if not _tried_has(rec, attack, recrack_on_new):
                 batch.append(target)
         if batch:
-            return wl, batch
+            return attack, batch
     return None
 
 
@@ -196,18 +216,20 @@ def queue_path(crack_dir):
     return os.path.join(crack_dir, QUEUE_DIR)
 
 
-def enqueue_job(crack_dir, files, wordlist, rules=(), label="", origin="manual",
-                now=None):
+def enqueue_job(crack_dir, files, wordlist="", mask="", rules=(), label="",
+                origin="manual", now=None):
     """Write a manual crack job and return its path. ``files`` are the capture
-    files to crack; ``wordlist`` a single wordlist path; ``rules`` optional rule
-    paths. A monotonic, random-suffixed name keeps jobs ordered and unique."""
+    files to crack; give **either** a ``wordlist`` path (dictionary attack) **or**
+    a ``mask`` string (brute force, e.g. ``?d?d?d?d?d?d?d?d``); ``rules`` optional
+    rule paths (dictionary only). A monotonic, random-suffixed name keeps jobs
+    ordered and unique."""
     now = time.time() if now is None else now
     directory = queue_path(crack_dir)
     os.makedirs(directory, exist_ok=True)
     name = "job-%d-%s.json" % (int(now * 1000), os.urandom(3).hex())
     path = os.path.join(directory, name)
-    job = {"files": list(files), "wordlist": wordlist, "rules": list(rules),
-           "label": label, "origin": origin, "created": now}
+    job = {"files": list(files), "wordlist": wordlist, "mask": mask,
+           "rules": list(rules), "label": label, "origin": origin, "created": now}
     _write_json_atomic(path, job)
     return path
 

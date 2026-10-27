@@ -126,6 +126,15 @@ order = "size"
 # runtime, so pair it with a SMALL wordlist and leave it off for big lists. See
 # docs/user-guide/wordlist-recommendations.md.
 rules = []
+# Optional brute-force MASK passes, run after every wordlist (the deepest, slowest
+# tier). The way to catch an all-numeric router default a wordlist can't hold,
+# e.g. "?d?d?d?d?d?d?d?d" = every 8-digit key (~100M candidates ~ many hours on a
+# Pi CPU, per network). Empty by default so auto-crack never surprise-runs a
+# multi-hour brute force; add masks here to arm it, or run one deliberately on a
+# chosen target with `kestrel crack run <file> --mask "..."` or the /loot page.
+# ?d digit  ?l lower  ?u upper  ?s symbol  ?a all.  See
+# docs/user-guide/wordlist-recommendations.md.
+masks = []
 # Resource guardrails -- cracking is a background sipper, never the priority.
 nice = 15                   # CPU niceness for the hashcat child (0-19; higher
                             # yields more readily to capture/daemon/agent)

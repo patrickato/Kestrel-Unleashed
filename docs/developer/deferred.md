@@ -153,15 +153,3 @@ How to use this file:
 - **Pick up when:** the e-ink face layout is next revised, or an operator asks
   for the cracked count on the panel.
 
-### Optional hashcat mask passes
-
-- **What:** cracking is dictionary-only (`-a 0`). Pure-numeric WPA keys (common
-  on consumer routers) are better covered by a mask attack
-  (`-a 3 ?d?d?d?d?d?d?d?d`), which the worker does not run.
-- **Why deferred:** keeps the first cut simple (one attack mode, one job shape);
-  masks add a second job type and their own time budgeting on a slow CPU.
-- **What to do:** add an optional `[crack] masks` list that the worker runs as
-  extra passes (a job `mode` of dict|mask), tracked in the tried-set like a
-  wordlist signature so "leave it alone" still holds.
-- **Pick up when:** numeric-PSK networks are common enough in the operator's
-  environment to be worth the extra runtime.

@@ -286,6 +286,8 @@ Cracking needs a wordlist. Two curated lists are included so it works out of the
 
 Every readable file in the wordlists folder is used automatically — no config to edit. They are tried **smallest first**, so quick lists catch easy passwords in minutes and a big list like rockyou grinds in the background as the last resort. On a Pi, cracking WPA2 is CPU-slow (~1–2k guesses a second), so a small WPA-focused list first, with rockyou as the overnight pass, works best. Hashcat rule files are already on the device: turn one on with `[crack] rules = ["best64.rule"]` in `config.toml` for a deeper retry on a small list. For which lists and rules to use, ranked for this hardware, see `docs/user-guide/wordlist-recommendations.md` in the project.
 
+For a random **all-numeric** router key that no wordlist holds, use a brute-force **mask** on a chosen target: `kestrel crack run <file>.hc22000 --mask '?d?d?d?d?d?d?d?d'` (every 8-digit key), or the mask box on the Loot page. A brute force runs for hours, so masks are off by default and best aimed at one network at a time.
+
 ### Seeing and driving it
 
 The dashboard's **Loot** card (→ *Loot* page) lists every captured network, its device type and BSSID, and — for the ones it cracked — the password in cleartext. With the dashboard login on, the same page lets you tick one or more capture files and queue them against a chosen wordlist or ruleset: the easy way to throw a bigger list at whatever has not cracked yet, from your phone or the device's own screen.
@@ -664,7 +666,7 @@ This is the same mechanism as the first-boot Wi-Fi staging, and it works at any 
 | `kestrel crack list [FILTER]` | List the loot (recovered passwords, in cleartext). |
 | `kestrel crack show <ESSID\|BSSID>` | Full loot for the matching network(s). |
 | `kestrel crack wordlists` | List the wordlists on the device, in the order tried. |
-| `kestrel crack run FILE... [--wordlist NAME\|all] [--rules NAME]` | Queue a manual crack of one or more capture files. |
+| `kestrel crack run FILE... [--wordlist NAME\|all \| --mask '?d?d?d?d?d?d?d?d'] [--rules NAME]` | Queue a manual crack (wordlist or brute-force mask) of one or more capture files. |
 | `kestrel crack enable` / `disable` | Turn on-device cracking on or off. |
 | `kestrel crack clear --yes` | Clear the loot store (captures and wordlists untouched). |
 

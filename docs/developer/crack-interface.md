@@ -65,8 +65,10 @@ always keeps priority.
   ```
 - **`queue/job-<ms>-<rand>.json`** — manual crack jobs, written by the web `/loot`
   page and `kestrel crack run` (as pi), consumed oldest-first and deleted:
-  `{"files": [<abs capture paths>], "wordlist": <abs path>, "rules": [<abs>],
-  "label": "...", "origin": "manual|web", "created": <epoch>}`.
+  `{"files": [<abs capture paths>], "wordlist": <abs path>, "mask": <mask|"">,
+  "rules": [<abs>], "label": "...", "origin": "manual|web", "created": <epoch>}`.
+  A job gives **either** a `wordlist` (dictionary attack) **or** a `mask` (brute
+  force); a non-empty `mask` wins.
 - **`kestrel.potfile`** — hashcat's shared potfile (accumulates every crack).
 
 ## Wordlists
@@ -85,11 +87,18 @@ always keeps priority.
 
 ## Work model
 
-- **Automatic** (derived each pass, no persisted queue): wordlist-first. The next
-  unit is the first wordlist (in order) that still has an uncracked target which
+An **attack** (`store.build_attacks`) is a wordlist (`kind: dict`) or a brute-force
+mask (`kind: mask`), each with a tried-set `sig` (`name:size:mtime` for a
+wordlist, `mask:<mask>` for a mask). The ordered attack list is **wordlists
+first** (smallest-first) **then masks** (the deepest, slowest tier). `[crack]
+masks` is empty by default, so auto-crack never surprise-runs a multi-hour brute
+force; a mask is normally a deliberate deep attack on a chosen target.
+
+- **Automatic** (derived each pass, no persisted queue): attack-first. The next
+  unit is the first attack (in order) that still has an uncracked target which
   has not tried it, run once against **every** such target (one hashcat run tests
-  all outstanding hashes against the loaded wordlist). Cracked → password
-  recorded; not cracked → the wordlist signature is added to that target's
+  all outstanding hashes against the loaded attack). Cracked → password
+  recorded; not cracked → the attack's signature is added to that target's
   `tried`. A cracked or fully-tried (`exhausted`) target yields no work — this is
   "leave it alone". Capture is "done" with an AP once it holds a crackable
   hashline (AngryOxide de-dupes per AP); the cracker keeps working the stored
@@ -102,9 +111,12 @@ always keeps priority.
 ## Cracking
 
 Kestrel stores `.hc22000`, so cracking is always `hashcat -m 22000` (EAPOL +
-PMKID). The worker materializes the target hashlines to a temp file, runs
+PMKID). The worker materializes the target hashlines to a temp file and runs
+either a dictionary attack —
 `nice -n <nice> hashcat -m 22000 -a 0 --quiet --potfile-path <pot> -w <workload>
-[-r <rule>] <hashfile> <wordlist>`, then reads back what cracked with
+[-r <rule>] <hashfile> <wordlist>` — or a brute-force mask —
+`nice -n <nice> hashcat -m 22000 -a 3 --quiet --potfile-path <pot> -w <workload>
+<hashfile> <mask>` — then reads back what cracked with
 `hashcat -m 22000 --show --potfile-path <pot> <hashfile>` (the first `:` splits
 hashline from password; the hashline is `*`-separated and carries no `:`).
 

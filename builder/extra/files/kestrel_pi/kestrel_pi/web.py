@@ -631,6 +631,19 @@ def create_app(daemon):
         if not picked:
             return _loot_redirect(ctl, "Select at least one capture file.",
                                   err=True)
+        # A brute-force mask takes precedence over the wordlist when filled. The
+        # mask is passed to hashcat as an argv element (no shell), so it can't
+        # inject; cap its length so a stray paste can't make a silly keyspace.
+        mask = (request.form.get("mask") or "").strip()
+        if mask:
+            if len(mask) > 64:
+                return _loot_redirect(ctl, "Mask is too long.", err=True)
+            crack_store.enqueue_job(CRACK_DIR, picked, mask=mask, label="web-mask")
+            msg = ("Queued a mask job (%s) over %d file(s); a brute force can "
+                   "take hours on the Pi." % (mask, len(picked)))
+            if not bool(crack_cfg.get("enabled", True)):
+                msg += " Note: quick-crack is off; enable it to process the queue."
+            return _loot_redirect(ctl, msg)
         choice = request.form.get("wordlist") or "all"
         if choice == "all":
             targets = [w["path"] for w in lists]
@@ -2478,14 +2491,19 @@ def _loot_crack_form(daemon, control):
         rule_html = ('<label>Rules <select name="rules">' + "".join(ropts)
                      + "</select></label>")
 
-    hint = ('<p class="hint">Tick the capture files to crack, pick a wordlist '
-            "(or All), and queue it. Great for throwing a bigger list or a "
-            "ruleset at whatever hasn't cracked yet.</p>")
+    mask_html = ('<label>Or brute-force mask <input type="text" name="mask" '
+                 'placeholder="?d?d?d?d?d?d?d?d" maxlength="64"></label>')
+    hint = ('<p class="hint">Tick the capture files to crack, then pick a wordlist '
+            "(or All) — great for throwing a bigger list or a ruleset at whatever "
+            "hasn't cracked yet. Or give a <strong>brute-force mask</strong> "
+            "(e.g. <code>?d?d?d?d?d?d?d?d</code> = every 8-digit key) to catch an "
+            "all-numeric router default; a mask takes precedence over the wordlist "
+            "and can run for hours.</p>")
     return (
         "<h2>Crack more</h2>" + hint
         + '<form method="post" action="' + _esc(_url("/loot", control)) + '">'
         + _csrf_field(control) + file_box
-        + '<div class="formrow">' + wl_select + rule_html
+        + '<div class="formrow">' + wl_select + rule_html + mask_html
         + '<button type="submit">Crack selected</button></div></form>')
 
 
