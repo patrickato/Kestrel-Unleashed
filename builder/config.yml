@@ -86,6 +86,12 @@
           - hashcat
           - pocl-opencl-icd
           - ocl-icd-libopencl1
+          # Kestrel-Unleashed: WPS PIN / Pixie-Dust attacks. reaver drives the
+          # attack (and ships `wash`, the WPS scanner); pixiewps does the offline
+          # Pixie-Dust computation reaver calls. CLI-driven (`kestrel wps`), no
+          # service, gated by the authorized-use ack. Lab / authorized use only.
+          - reaver
+          - pixiewps
           # Kestrel-Unleashed: on-device kiosk for an attached HDMI touchscreen.
           # cage is a minimal single-app Wayland kiosk compositor; it runs
           # chromium full-screen on the dashboard. seatd hands cage the seat

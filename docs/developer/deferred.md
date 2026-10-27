@@ -153,3 +153,22 @@ How to use this file:
 - **Pick up when:** the e-ink face layout is next revised, or an operator asks
   for the cracked count on the panel.
 
+## WPS attacks (`kestrel wps` / reaver)
+
+### Validate the attack end-to-end on hardware
+
+- **What:** `kestrel_pi/wps.py` (reaver command building, `-vv` output parsing,
+  loot write) and the `kestrel wps` CLI (monitor-mode switch, capture
+  pause/restore, reaver/wash invocation) are implemented and unit-tested for the
+  pure parts, but the full `scan` → `attack` → recovered-key-in-loot path has
+  **not** been run against a real WPS AP on a Pi with the capture dongle.
+- **Why deferred:** needs real hardware (a Pi, the AWUS036ACM, and a WPS AP the
+  operator is authorized to test), which the build/CI environment doesn't have.
+- **What to do:** on a device, `sudo kestrel wps scan`, confirm `wash` lists a
+  known WPS AP, run `sudo kestrel wps attack <bssid>`, and confirm a Pixie-Dust
+  hit lands on `/loot` tagged `via WPS (pin …)`. Check the capture service
+  actually stops for the run and restarts after. Confirm the `reaver -vv` field
+  labels this build prints still match `_PIN_RE`/`_PSK_RE`/`_SSID_RE` in
+  `wps.py`, and tighten the regexes if the Kali/bookworm reaver differs.
+- **Pick up when:** a Pi + dongle + an authorized WPS AP are on hand.
+

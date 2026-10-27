@@ -282,6 +282,19 @@ extra_args = []
 # /boot/firmware/config.txt (e.g. `display_hdmi_rotate=2` for 180 deg), not here.
 # See docs/user-guide/kiosk-setup.md.
 
+# WPS PIN / Pixie-Dust attacks (reaver). A separate attack class from handshake
+# capture: a WPS-enabled AP can leak its WPA key. CLI-driven (`kestrel wps …`),
+# never an always-on service; it TRANSMITS, so it takes the authorized-use
+# acknowledgment, uses the capture dongle in monitor mode and pauses capture
+# while it runs. Recovered keys land in the crack loot store (shown on /loot).
+# Lab / authorized use only. No radio is touched until you run `kestrel wps`.
+[wps]
+# Default to the offline Pixie-Dust attack (fast when the AP is vulnerable);
+# `kestrel wps attack … --no-pixie` falls back to the slow online PIN flow.
+pixie_dust = true
+# How long `kestrel wps scan` listens for WPS-enabled APs, in seconds.
+scan_seconds = 20
+
 # All reference plugins ship DISABLED. `kestrel plugins enable <name>`
 # shows the plugin's capabilities, takes the authorized-use acknowledgment for
 # any that leaves the device, and collects credentials before turning it on.

@@ -2562,6 +2562,7 @@ def test_loot_page_shows_cleartext_and_batch_crack_enqueues(monkeypatch, tmp_pat
     # the capture file to pick.
     body = client.get("/loot", headers=_basic()).get_data(as_text=True)
     assert "HomeWiFi" in body and "hunter2" in body
+    assert "via small.txt" in body          # how it was recovered
     assert "Crack more" in body and "HomeWiFi.hc22000" in body
     # the on-device wordlist/ruleset speed-vs-odds guide is on the page
     assert "Which wordlist + rule should I use" in body
@@ -2578,6 +2579,31 @@ def test_loot_page_shows_cleartext_and_batch_crack_enqueues(monkeypatch, tmp_pat
     assert len(jobs) == 1
     assert jobs[0][1]["wordlist"].endswith("small.txt")
     assert jobs[0][1]["files"] == [str(capfile)]
+
+
+def test_loot_page_shows_wps_entry(monkeypatch, tmp_path):
+    pytest.importorskip("flask")
+    import json
+
+    crack_dir = tmp_path / "crack"; crack_dir.mkdir()
+    wl_dir = tmp_path / "wl"; wl_dir.mkdir()
+    cap_dir = tmp_path / "cap"; cap_dir.mkdir()
+    capfile = cap_dir / "x.hc22000"; capfile.write_text("")
+    # A WPS-recovered key: cracked, no handshakes, source=wps + pin.
+    (crack_dir / "loot.json").write_text(json.dumps({"aps": {
+        "AA:BB:CC:DD:EE:FF": {
+            "bssid": "AA:BB:CC:DD:EE:FF", "essid": "RouterX",
+            "status": "cracked", "password": "letmein88",
+            "device": "router", "hashlines": 0, "source": "wps",
+            "wps_pin": "12345670", "cracked_wordlist": "WPS (pin 12345670)",
+            "tried": []}}}))
+    monkeypatch.setattr(web, "CRACK_DIR", str(crack_dir))
+    monkeypatch.setattr(web, "iface_ipv4", lambda i: None)
+    client = web.create_app(
+        _loot_daemon(tmp_path, wl_dir, cap_dir, capfile)).test_client()
+    body = client.get("/loot", headers=_basic()).get_data(as_text=True)
+    assert "RouterX" in body and "letmein88" in body
+    assert "via WPS (pin 12345670)" in body     # method shown, not a wordlist
 
 
 def test_loot_post_rejects_unknown_file(monkeypatch, tmp_path):

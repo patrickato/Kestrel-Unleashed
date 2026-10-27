@@ -19,6 +19,7 @@ Kestrel is a small, battery-powered companion that sits nearby, listens to the W
 - **Modern, reproducible base.** A current 64-bit Raspberry Pi OS (bookworm, Python 3.11), produced by a scripted Packer + Ansible build rather than a hand-maintained card, so the whole image is easy to rebuild, audit and extend.
 - **AngryOxide capture engine.** Capture runs on [AngryOxide](https://git.3ntropy.io/aluminum-ice/AngryOxide) over in-kernel `nl80211`/mac80211 drivers — no out-of-tree drivers or DKMS — on a dedicated USB adapter, so the built-in Wi-Fi and Bluetooth stay free for management.
 - **On-device quick-crack.** A niced, thermal-gated background worker cracks captured handshakes on the Pi itself with `hashcat -m 22000` against your wordlists (drop-in, auto-detected) — dictionaries, rules and brute-force masks — and shows the recovered password in cleartext on the web Loot page and the CLI. Local-only — it reads data you already captured, never the radio or network. (See [On-device quick-crack](#on-device-quick-crack-kestrel-unleashed).)
+- **WPS attacks.** `kestrel wps` runs reaver's offline Pixie-Dust (and online PIN) attack against a WPS-enabled AP; a recovered key lands in the same Loot store as cracked handshakes. CLI-driven, gated by the authorized-use acknowledgment, uses the capture dongle and pauses capture while it runs. (See [WPS attacks](#wps-attacks-kestrel-unleashed).)
 - **On-device kiosk.** Optional full-screen, touch-operable dashboard on an attached HDMI screen at boot (chromium under cage). (See [On-device kiosk](#on-device-kiosk-kestrel-unleashed).)
 - **Reworked plugin host.** A small daemon hosts features as plugins. The `Plugin` base class and `on_*` hooks stay source-compatible with the pwnagotchi plugin API, with non-blocking off-loop dispatch, typed plugin context, capability and permission declarations, dependency ordering, hook-API versioning, and config validation with health reporting added on top.
 - **Mobile-first web dashboard.** A responsive, dark-mode-aware dashboard and control surface — server-rendered and dependency-free — shows live status and per-plugin readouts and drives capture, plugins and power from a phone. (See [Web interface](#web-interface).)
@@ -216,6 +217,23 @@ Cracking only does something once a wordlist is present. Two curated lists ship 
 - **Before first boot (no SSH):** make a folder named `kestrel-wordlists` on the **boot partition** (`/boot/firmware` on the device, the small FAT partition your PC sees when you plug in the card) and drop your wordlist files in it. On boot they are moved into `/var/lib/kestrel/wordlists/` automatically and the staged folder is cleared.
 
 Every readable file in the wordlists dir is picked up automatically — no config edit needed. They are tried **smallest-first** by default (`[crack] order = "size"`), so quick lists land the easy passwords in minutes and a big list like rockyou grinds in the background as the last resort. On a Pi, prefer a small **WPA-specific** list first (SecLists `Passwords/WiFi-WPA/…`) and keep rockyou as the overnight pass; cracking WPA2 on a CPU is slow (~1–2k guesses/sec), so smallest-first matters. Hashcat **rule** files are already on the device (`/usr/share/hashcat/rules/`): select one by bare name with `[crack] rules` (e.g. `rules = ["best64.rule"]`) for a deeper retry on a small list. **Which lists and rules to use, ranked for this hardware, is in [`docs/user-guide/wordlist-recommendations.md`](docs/user-guide/wordlist-recommendations.md).**
+
+## WPS attacks (Kestrel-Unleashed)
+
+> **Lab / authorized use only — this transmits.** `kestrel wps` asks for the authorized-use acknowledgment (the same one capture uses) before it touches the radio.
+
+A second attack class beside handshake capture: a WPS-enabled AP can leak its WPA passphrase. [reaver](https://github.com/t6x/reaver-wps-fork-t6x)'s offline **Pixie-Dust** attack recovers it in seconds-to-minutes when the AP is vulnerable, with the slow online PIN brute force as a `--no-pixie` fallback. A recovered key lands in the **same Loot store** as cracked handshakes, so it shows on the Loot page and in `kestrel crack list`, tagged `via WPS (pin …)`.
+
+It is **CLI-driven** (no always-on service), uses the **capture dongle** in monitor mode, and **pauses capture** while it runs (one radio, one job at a time):
+
+```bash
+sudo kestrel wps scan                         # find WPS-enabled APs (uses the dongle)
+sudo kestrel wps attack AA:BB:CC:DD:EE:FF      # Pixie-Dust by default; saves a hit to loot
+sudo kestrel wps attack AA:BB:CC:DD:EE:FF --no-pixie   # slow online PIN fallback
+kestrel wps list                              # WPS-recovered keys (also on /loot)
+```
+
+Adds the `reaver`/`pixiewps` packages (**reflash-class**). Full guide, including the WPS-locked case: [`docs/user-guide/wps-attacks.md`](docs/user-guide/wps-attacks.md).
 
 ## On-device kiosk (Kestrel-Unleashed)
 

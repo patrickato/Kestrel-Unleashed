@@ -307,6 +307,24 @@ Once a network yields a crackable handshake, capturing leaves it alone (one is e
 
 ---
 
+## WPS attacks
+
+**Lab / authorized use only — this transmits.** Only run it against networks you own or are authorized to assess; it asks for the authorized-use acknowledgment first, the same one capture uses.
+
+Many home routers leave **WPS** on, and a WPS access point can be made to hand over its WPA passphrase. The offline **Pixie-Dust** attack (the default) recovers it in seconds-to-minutes when the router is vulnerable; a slow online PIN brute force is the `--no-pixie` fallback. A recovered key shows up on the **Loot** page and in `kestrel crack list` just like a cracked handshake, tagged `via WPS`.
+
+It uses the **capture dongle** (not the Pi's built-in Wi-Fi) and **pauses capture** while it runs — one radio, one job at a time. There is no always-on service; it only does something when you run it:
+
+```bash
+sudo kestrel wps scan                      # find WPS-enabled APs nearby
+sudo kestrel wps attack AA:BB:CC:DD:EE:FF  # Pixie-Dust; saves a recovered key to loot
+kestrel wps list                           # what WPS has recovered
+```
+
+If an attack says "no key recovered", the AP is most likely WPS-locked (the scan's `Lck` column said `Yes`) or simply not vulnerable — move on rather than hammering it. `--channel N` (from the scan) speeds up association; `--no-pixie` switches to the slow PIN brute force only when Pixie-Dust fails and the AP isn't locked.
+
+---
+
 ## The on-device kiosk (HDMI touchscreen)
 
 If you've attached an HDMI touchscreen, the kiosk shows the dashboard full-screen on it at boot — a live, touch-operable console. It ships off; turn it on with:
@@ -681,6 +699,14 @@ This is the same mechanism as the first-boot Wi-Fi staging, and it works at any 
 | `kestrel crack run FILE... [--wordlist NAME\|all \| --mask '?d?d?d?d?d?d?d?d'] [--rules NAME]` | Queue a manual crack (wordlist or brute-force mask) of one or more capture files. |
 | `kestrel crack enable` / `disable` | Turn on-device cracking on or off. |
 | `kestrel crack clear --yes` | Clear the loot store (captures and wordlists untouched). |
+
+### WPS attacks
+
+| Command | What it does |
+| --- | --- |
+| `kestrel wps scan [--seconds N]` | Scan for WPS-enabled APs (uses the dongle; pauses capture). |
+| `kestrel wps attack <BSSID> [--channel N] [--no-pixie] [--yes]` | Pixie-Dust / PIN attack; asks the authorized-use ack, pauses capture, saves a recovered key to loot. |
+| `kestrel wps list` | List WPS-recovered keys (also on the Loot page). |
 
 ### Kiosk
 

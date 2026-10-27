@@ -98,6 +98,29 @@ off-device access. Adds `cage`/`seatd`/`chromium-browser` (reflash-class), a
 `kestrel kiosk` CLI. Needs validation on a real screen; see
 `docs/user-guide/kiosk-setup.md`.
 
+### Added: WPS PIN / Pixie-Dust attacks (reaver)
+A second attack class beside handshake capture: a WPS-enabled AP can leak its
+WPA passphrase, and reaver's offline **Pixie-Dust** attack recovers it in
+seconds-to-minutes when the AP is vulnerable (with the slow online PIN brute
+force as a `--no-pixie` fallback).
+
+- `builder/config.yml`: adds `reaver` (ships `wash`, the WPS scanner) and
+  `pixiewps`.
+- `builder/extra/files/config.toml`: new `[wps]` table (`pixie_dust`,
+  `scan_seconds`) — defaults only; nothing runs until invoked. One new table.
+- `kestrel_pi/wps.py` (new, stdlib-only, unit-tested): reaver command building,
+  `-vv` output parsing, and writing a recovered key into the **crack loot
+  store** so WPS hits show on `/loot` and in `kestrel crack list`, tagged
+  `via WPS (pin …)`.
+- CLI `kestrel wps {scan,attack,list}`: CLI-driven, **no always-on service**. It
+  **transmits**, so it takes the authorized-use acknowledgment; it uses the
+  capture dongle in monitor mode and **pauses capture** for the run, restarting
+  it afterward. See `docs/user-guide/wps-attacks.md`.
+
+**Release impact: reflash-class** (adds apt packages), so it ships on a freshly
+flashed image, not an app-layer update. The radio orchestration is not yet
+validated end-to-end on hardware (see `docs/developer/deferred.md`).
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,
