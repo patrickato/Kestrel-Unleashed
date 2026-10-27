@@ -2,12 +2,11 @@
   <img src="assets/branding/kestrel-mark-twotone.svg" alt="Kestrel" width="120">
 </p>
 
-# Kestrel
+# Kestrel-Unleashed
 
-<p align="center">
-  <a href="https://git.3ntropy.io/aluminum-ice/kestrel/releases"><img src="https://git.3ntropy.io/aluminum-ice/kestrel/badges/release.svg" alt="Latest release"></a>
-  <a href="https://git.3ntropy.io/aluminum-ice/kestrel/actions?workflow=lint.yml"><img src="https://git.3ntropy.io/aluminum-ice/kestrel/badges/workflows/lint.yml/badge.svg" alt="Lint status"></a>
-</p>
+> **A modified fork of [Kestrel](https://git.3ntropy.io/aluminum-ice/kestrel) by aluminum-ice**, released under the same license (GPL-3.0-or-later). This fork is tuned for authorized use in an isolated personal lab: capture and the learning agent are **enabled by default** and the authorized-use acknowledgment is pre-satisfied for the operator's own networks. See **[CHANGES-UNLEASHED.md](CHANGES-UNLEASHED.md)** for every change and **[NOTICE](NOTICE)** for attribution. This fork is independent and does not represent or speak for upstream Kestrel.
+>
+> **Use only on networks you own or are explicitly authorized to test. Unauthorized use may be illegal.**
 
 A clean, secrets-free 64-bit Raspberry Pi OS image, built with [Packer](https://www.packer.io/) and [Ansible](https://www.ansible.com/), that turns a Raspberry Pi into a handheld Wi-Fi capture-and-learning device.
 

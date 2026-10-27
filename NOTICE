@@ -1,0 +1,28 @@
+Kestrel-Unleashed
+=================
+
+Kestrel-Unleashed is a modified version of Kestrel, released under the GNU
+General Public License v3.0 or later (see the LICENSE file).
+
+Upstream work
+-------------
+  Kestrel — Copyright (c) aluminum-ice
+  Source: https://git.3ntropy.io/aluminum-ice/kestrel
+  License: GPL-3.0-or-later
+
+This fork
+---------
+  Kestrel-Unleashed — https://github.com/patrickato/Kestrel-Unleashed
+  License: GPL-3.0-or-later (unchanged)
+
+As required by the GNU GPL (section 5), this is a modified version of Kestrel and
+carries prominent notices stating that it was changed. A dated summary of every
+modification is in CHANGES-UNLEASHED.md. The original Kestrel copyright, license
+and commit history are retained in full; nothing in this fork removes, hides or
+supersedes the authorship of the upstream project or its contributors.
+
+Kestrel-Unleashed keeps the same license as Kestrel and remains free software:
+you may copy, modify and redistribute it under the terms of the GPL-3.0-or-later.
+
+This fork is independent. It is not endorsed by, affiliated with, or speaking for
+the upstream Kestrel project.
