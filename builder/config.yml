@@ -980,6 +980,7 @@
       install -m 0644 -o pi -g pi \
         {{ (playbook_dir ~ '/files/wordlists/starter.txt') | quote }} \
         {{ (playbook_dir ~ '/files/wordlists/wpa-top.txt') | quote }} \
+        {{ (playbook_dir ~ '/files/wordlists/device-defaults.txt') | quote }} \
         /var/lib/kestrel/wordlists/
 
   - name: install the kestrel crack wordlist boot provisioner

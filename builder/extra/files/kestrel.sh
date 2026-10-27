@@ -61,6 +61,8 @@ Usage: $PROG <command>
   crack status       Show the worker state and loot summary
   crack list [FILTER]   List loot (recovered passwords in cleartext)
   crack show Q       Full loot for the network(s) matching an ESSID or BSSID
+  crack suggest Q    Suggest the best attacks for a network by its device type
+                     (e.g. a camera, an ISP router, a Wi-Fi Direct printer)
   crack wordlists    List the wordlists on the device (in the order tried)
   crack run FILE... [--wordlist NAME|all | --mask '?d?d?d?d?d?d?d?d'] [--rules NAME]...
                      Queue a manual crack of one or more capture files (re-run
@@ -1696,6 +1698,29 @@ for r in hits:
 PY
 }
 
+cmd_crack_suggest() {
+    [ $# -ge 1 ] || die "usage: $PROG crack suggest <essid-or-bssid>"
+    PWN_LOOT="$PWN_CRACK_DIR/loot.json" PWN_WLDIR="$PWN_WORDLISTS_DIR" PWN_Q="$1" \
+        run_as_pi "$PWN_VENV_PYTHON" -I -c '
+import json, os
+from kestrel_pi.crack import suggest as S
+q = os.environ["PWN_Q"]
+have = os.path.isfile(os.path.join(os.environ["PWN_WLDIR"], S.DEFAULTS_LIST))
+essid, bssid = q, ""
+try:
+    d = json.load(open(os.environ["PWN_LOOT"]))
+    ql = q.lower()
+    for b, r in d.get("aps", {}).items():
+        if ql in (r.get("essid", "") + " " + b + " " + r.get("device", "")).lower():
+            essid, bssid = r.get("essid", "") or q, r.get("bssid", "") or b
+            break
+except OSError:
+    pass
+print(S.render_text(S.suggest(essid=essid, bssid=bssid, have_defaults=have),
+                    essid=essid))
+'
+}
+
 cmd_crack_wordlists() {
     local wd order
     wd=$(cfg crack.wordlists_dir "$PWN_WORDLISTS_DIR")
@@ -1843,12 +1868,13 @@ cmd_crack() {
         status) cmd_crack_status ;;
         list|loot) cmd_crack_list "$@" ;;
         show) cmd_crack_show "$@" ;;
+        suggest) cmd_crack_suggest "$@" ;;
         wordlists|lists) cmd_crack_wordlists ;;
         run) cmd_crack_run "$@" ;;
         enable) cmd_crack_enable ;;
         disable) cmd_crack_disable ;;
         clear) cmd_crack_clear "$@" ;;
-        *) die "unknown 'crack' subcommand: $sub (status|list|show|wordlists|run|enable|disable|clear)" ;;
+        *) die "unknown 'crack' subcommand: $sub (status|list|show|suggest|wordlists|run|enable|disable|clear)" ;;
     esac
 }
 

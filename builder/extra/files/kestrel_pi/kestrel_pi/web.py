@@ -43,6 +43,7 @@ from .applyclient import APPLY_SOCKET, apply_change
 from .connectivity import MANAGEMENT_INTERFACES
 from .crack import CRACK_DEFAULTS, CRACK_DIR
 from .crack import store as crack_store
+from .crack import suggest as crack_suggest
 from .crack import wordlists as crack_wordlists
 from .plugins import PluginPage, PluginRedirect
 
@@ -2352,6 +2353,9 @@ def _render_loot(daemon, control=None, message=None, error=False):
                    "CPU; add a wordlist and capture a handshake to get going.</p>")
 
     # The loot table: one row per AP, cracked first, password in cleartext.
+    _crack_cfg = daemon._fresh_config().get("crack") or {}
+    wdir = _crack_cfg.get("wordlists_dir") or CRACK_DEFAULTS["wordlists_dir"]
+    have_defaults = os.path.isfile(os.path.join(wdir, crack_suggest.DEFAULTS_LIST))
     rows_in = sorted(aps.values(), key=lambda r: (
         r.get("status") != "cracked", (r.get("essid") or "").lower()))
     trows = []
@@ -2372,22 +2376,34 @@ def _render_loot(daemon, control=None, message=None, error=False):
                 pw += ' <span class="smeta">via ' + _esc(via) + "</span>"
         else:
             pw = '<span class="smeta">—</span>'
+        if st == "cracked":
+            sug_cell = '<span class="smeta">—</span>'
+        else:
+            sug = crack_suggest.suggest(essid=essid, bssid=r.get("bssid") or "",
+                                        have_defaults=have_defaults)
+            runnable = [a for a in sug["attacks"] if a.get("runnable")]
+            lbl = runnable[0]["label"] if runnable else "see suggestions"
+            if any(a["kind"] == "keygen" for a in sug["attacks"]):
+                lbl += " + vendor keygen"
+            sug_cell = '<span class="smeta">' + _esc(lbl) + "</span>"
         trows.append(
             '<tr><td data-label="status">' + badge + "</td>"
             '<td data-label="network">' + name + "</td>"
             '<td data-label="bssid">' + _esc(r.get("bssid") or "") + "</td>"
             '<td data-label="device">' + _esc(r.get("device") or "") + "</td>"
+            '<td data-label="suggested">' + sug_cell + "</td>"
             '<td data-label="password">' + pw + "</td>"
             '<td data-label="handshakes">' + _esc(r.get("hashlines", 0))
             + "</td></tr>")
     body_rows = "".join(trows) or (
-        "<tr><td colspan='6'>no loot yet (nothing captured or cracked)</td></tr>")
-    note = ('<p class="smeta">Passwords are shown in cleartext. '
+        "<tr><td colspan='7'>no loot yet (nothing captured or cracked)</td></tr>")
+    note = ('<p class="smeta">Passwords are shown in cleartext. Suggested = the '
+            "best attack for that device type (also `kestrel crack suggest`). "
             + ("%d network(s)." % len(rows_in) if rows_in else "") + "</p>")
     table = ("<h2>Loot</h2>" + note
              + "<div class='wrap'><table><thead><tr><th>status</th>"
-             "<th>network</th><th>bssid</th><th>device</th><th>password</th>"
-             "<th>handshakes</th></tr></thead><tbody>" + body_rows
+             "<th>network</th><th>bssid</th><th>device</th><th>suggested</th>"
+             "<th>password</th><th>handshakes</th></tr></thead><tbody>" + body_rows
              + "</tbody></table></div>")
 
     form = _loot_crack_form(daemon, control)

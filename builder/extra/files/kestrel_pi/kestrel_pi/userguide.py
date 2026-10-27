@@ -711,6 +711,7 @@ This is the same mechanism as the first-boot Wi-Fi staging, and it works at any 
 | `kestrel crack status` | Show the worker state and a cracked/total summary. |
 | `kestrel crack list [FILTER]` | List the loot (recovered passwords, in cleartext). |
 | `kestrel crack show <ESSID\|BSSID>` | Full loot for the matching network(s). |
+| `kestrel crack suggest <ESSID\|BSSID>` | Suggest the best attacks for that network's device type (camera, ISP router, Wi-Fi Direct printer, …) with ready `crack run` lines. |
 | `kestrel crack wordlists` | List the wordlists on the device, in the order tried. |
 | `kestrel crack run FILE... [--wordlist NAME\|all \| --mask '?d?d?d?d?d?d?d?d'] [--rules NAME]` | Queue a manual crack (wordlist or brute-force mask) of one or more capture files. |
 | `kestrel crack enable` / `disable` | Turn on-device cracking on or off. |

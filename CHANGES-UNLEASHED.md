@@ -175,6 +175,32 @@ First hardware test surfaced two bugs that together made every handshake read as
 **Release impact: app-layer-safe** (only the `kestrel_pi` package changed), but
 it ships with the next image either way.
 
+### Added: device-aware crack suggestions
+The device-ID already classifies each captured AP (camera, ISP router, printer,
+...), and some SSIDs name the model outright (`UPC1234567`, `ATTabcdefg`,
+`NETGEAR42`). A new suggestion engine turns that into "what should I throw at
+this, in order" for recovering a **default** WPA key.
+
+- `kestrel_pi/crack/suggest.py` (new, stdlib-only, unit-tested): maps device
+  class + SSID pattern → an ordered attack list — curated default-key list,
+  brute-force masks (the 8-digit numeric mask is the universal high-value one),
+  and, when the SSID/OUI identifies a legacy model, the vendor key-generator to
+  run (UPC `upc_keys`, AT&T/Comcast/Belkin via PSKracker, Thomson/BT via
+  routerkeygen). Honest by design: cameras / hotspots / IoT hubs mostly onboard
+  via BLE/QR/open-AP and ship no crackable default, so it says so and falls back
+  to the generic order rather than inventing a vendor default.
+- CLI `kestrel crack suggest <network>` prints the ordered attacks with ready
+  `kestrel crack run` lines; the web Loot page gains a **suggested** column.
+- `builder/extra/files/wordlists/device-defaults.txt`: a small curated
+  default-key list (`12345678`, `password`, ...), installed alongside the
+  starter lists; the engine suggests it only when present.
+
+**Release impact: the engine + CLI + Loot column are app-layer-safe; the
+`device-defaults.txt` wordlist lands on a reflash** (the in-place engine doesn't
+install wordlists). The suggestions work without it (masks + existing lists), so
+an app-layer update gets the feature and the curated list rides in on the next
+image.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,
