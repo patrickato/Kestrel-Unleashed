@@ -7,7 +7,8 @@
 [capture]
 # Capture is OFF by default and only the tool turns it on, after an explicit
 # authorized-use acknowledgment. Enable with: sudo kestrel capture enable
-enabled = false
+# Kestrel-Unleashed: capture ships ON for authorized lab use (upstream: false).
+enabled = true
 # "auto" = the monitor-capable wlan whose driver is not the built-in chip
 # (brcmfmac). Pin an explicit interface name here to override detection.
 interface = "auto"
