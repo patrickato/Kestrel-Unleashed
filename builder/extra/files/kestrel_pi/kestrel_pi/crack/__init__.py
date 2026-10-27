@@ -71,6 +71,9 @@ CRACK_DEFAULTS = {
     "masks": [],
     "nice": 15,
     "workload": 1,
+    "kernel_accel": 1,          # hashcat -n: cap the per-batch size so a WPA
+                                # attack fits the Pi's 256 MB single-alloc OpenCL
+                                # limit (0 = let hashcat autotune -- too big here)
     "max_temp_c": 75,
     "resume_temp_c": 68,
     "max_job_seconds": 0,

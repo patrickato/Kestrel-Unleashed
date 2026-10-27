@@ -24,7 +24,8 @@ def have_hashcat():
     return shutil.which(HASHCAT) is not None
 
 
-def build_crack_cmd(hashfile, wordlist, potfile, rules=(), nice=15, workload=1):
+def build_crack_cmd(hashfile, wordlist, potfile, rules=(), nice=15, workload=1,
+                    kernel_accel=0):
     """argv for a straight-dictionary crack of ``hashfile`` with ``wordlist``.
 
     ``nice`` prepends ``nice -n N`` so the hashcat child yields to capture; a
@@ -32,9 +33,12 @@ def build_crack_cmd(hashfile, wordlist, potfile, rules=(), nice=15, workload=1):
     profile. ``--quiet`` silences the banner. ``--force`` is required on the Pi:
     the only OpenCL device is the CPU via pocl, which hashcat treats as
     unsupported and refuses to use without it (otherwise it exits non-zero
-    immediately and nothing is actually cracked). Results are read back with
-    :func:`build_show_cmd`, never scraped from stdout, so a crack and the
-    accounting never disagree."""
+    immediately and nothing is actually cracked). ``kernel_accel`` (>0) adds
+    ``-n N`` to cap the per-batch size: pocl limits a single allocation to
+    256 MB on the Pi, and a WPA attack's autotuned batch overflows that (hashcat
+    exits 252 "Not enough allocatable device memory"), so the worker pins it
+    low. Results are read back with :func:`build_show_cmd`, never scraped from
+    stdout, so a crack and the accounting never disagree."""
     cmd = []
     try:
         nice = int(nice)
@@ -50,13 +54,23 @@ def build_crack_cmd(hashfile, wordlist, potfile, rules=(), nice=15, workload=1):
     workload = max(1, min(4, workload))
     cmd += [HASHCAT, "-m", MODE, "-a", "0", "--quiet", "--force",
             "--potfile-path", str(potfile), "-w", str(workload)]
+    cmd += _accel_flag(kernel_accel)
     for rule in rules or ():
         cmd += ["-r", str(rule)]
     cmd += [str(hashfile), str(wordlist)]
     return cmd
 
 
-def build_mask_cmd(hashfile, mask, potfile, nice=15, workload=1):
+def _accel_flag(kernel_accel):
+    """``["-n", N]`` when a positive kernel-accel is set, else ``[]``."""
+    try:
+        ka = int(kernel_accel)
+    except (TypeError, ValueError):
+        return []
+    return ["-n", str(ka)] if ka > 0 else []
+
+
+def build_mask_cmd(hashfile, mask, potfile, nice=15, workload=1, kernel_accel=0):
     """argv for a brute-force **mask** attack (``-a 3``) of ``hashfile`` over
     ``mask`` (e.g. ``?d?d?d?d?d?d?d?d`` = every 8-digit key). Brute force is the
     way to catch an all-numeric router default a wordlist can't hold. Same nice/
@@ -74,8 +88,9 @@ def build_mask_cmd(hashfile, mask, potfile, nice=15, workload=1):
     except (TypeError, ValueError):
         workload = 1
     cmd += [HASHCAT, "-m", MODE, "-a", "3", "--quiet", "--force",
-            "--potfile-path", str(potfile), "-w", str(workload),
-            str(hashfile), str(mask)]
+            "--potfile-path", str(potfile), "-w", str(workload)]
+    cmd += _accel_flag(kernel_accel)
+    cmd += [str(hashfile), str(mask)]
     return cmd
 
 

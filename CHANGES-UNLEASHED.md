@@ -165,6 +165,12 @@ First hardware test surfaced two bugs that together made every handshake read as
   `status.json` (`error` field, additive — `contract_version` stays 1) and as a
   new `error` worker state / "Last error" dashboard readout, so the real cause is
   visible instead of a silent false exhaustion.
+- **Hashcat ran out of allocatable device memory.** With `--force` in place
+  hashcat then exited 252 ("Not enough allocatable device memory") because the
+  Pi's CPU OpenCL (pocl) caps a single allocation at 256 MB and a `-m 22000`
+  attack's autotuned batch overflows it. New `[crack] kernel_accel` (hashcat
+  `-n`, default `1`) pins the per-batch size so it fits; it is operator-tunable
+  (raise for speed on big lists until it errors again, then back off).
 
 **Release impact: app-layer-safe** (only the `kestrel_pi` package changed), but
 it ships with the next image either way.

@@ -190,6 +190,13 @@ def test_build_crack_cmd_clamps_and_prefixes():
     assert "-w" in cmd and cmd[cmd.index("-w") + 1] == "4"  # clamped to 4
     assert cmd[-2:] == ["/h", "/w"] and "-r" in cmd and "22000" in cmd
     assert "--force" in cmd        # required for the Pi's CPU/pocl OpenCL device
+    # kernel_accel caps the per-batch size (fits the Pi's 256 MB alloc limit).
+    # Use nice=0 so the only "-n" is the kernel-accel flag, not the nice prefix.
+    plain = hashcat.build_crack_cmd("/h", "/w", "/pot", nice=0)
+    assert "-n" not in plain                    # no cap unless asked
+    capped = hashcat.build_crack_cmd("/h", "/w", "/pot", nice=0, kernel_accel=4)
+    assert "-n" in capped and capped[capped.index("-n") + 1] == "4"
+    assert capped[-2:] == ["/h", "/w"]          # hash/wordlist still last
 
 
 def test_parse_show_splits_on_last_colon():

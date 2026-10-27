@@ -170,14 +170,17 @@ class CrackWorker:
         hashfile = self._materialize(lines)
         try:
             budget = int(conf.get("max_job_seconds") or 0) or None
+            accel = conf.get("kernel_accel", 1)
             if kind == "mask":
                 cmd = hc.build_mask_cmd(hashfile, attack["mask"], self.potfile,
                                         nice=conf.get("nice", 15),
-                                        workload=conf.get("workload", 1))
+                                        workload=conf.get("workload", 1),
+                                        kernel_accel=accel)
             else:
                 cmd = hc.build_crack_cmd(hashfile, attack["path"], self.potfile,
                                          rules=rules, nice=conf.get("nice", 15),
-                                         workload=conf.get("workload", 1))
+                                         workload=conf.get("workload", 1),
+                                         kernel_accel=accel)
             rc, _out, err = self._runner(cmd, timeout=budget)
             ok = rc in (0, 1, 124)  # 0 cracked, 1 exhausted, 124 our timeout
             if not ok:

@@ -141,6 +141,14 @@ nice = 15                   # CPU niceness for the hashcat child (0-19; higher
 workload = 1                # hashcat -w (1 = low/desktop-friendly .. 4 = nightmare).
                             # 1 keeps the Pi responsive and cooler; raise only on a
                             # well-cooled board you don't mind pinning.
+kernel_accel = 1            # hashcat -n: per-batch size. The Pi's CPU OpenCL (pocl)
+                            # caps a single allocation at 256 MB, and a WPA attack's
+                            # autotuned batch overflows it (hashcat exits 252 "not
+                            # enough allocatable device memory"), so this is pinned
+                            # low. 1 always fits and is plenty for the small lists;
+                            # raise it (2, 4, 8 ...) for more speed on big lists until
+                            # it errors again, then back off. 0 = hashcat autotune
+                            # (too big on the Pi).
 max_temp_c = 75             # pause cracking at/above this CPU temp (hard cap 85),
                             # the same thermal budget as the learning agent's training
 resume_temp_c = 68          # resume paused cracking once the CPU falls to/below this
