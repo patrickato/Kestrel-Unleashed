@@ -61,6 +61,7 @@ _STATE_LABEL = {
     "disabled": "disabled",
     "no-hashcat": "hashcat missing",
     "no-wordlists": "no wordlists",
+    "error": "error",
 }
 
 
@@ -74,6 +75,9 @@ def widget_elements(status, now=None):
          "value": _STATE_LABEL.get(status.get("state"), status.get("state") or "-"),
          "kind": "text"},
     ]
+    if status.get("error"):
+        elements.append({"name": "error", "label": "Last error",
+                         "value": str(status.get("error")), "kind": "text"})
     total = int(status.get("targets") or 0)
     cracked = int(status.get("cracked") or 0)
     elements.append({"name": "cracked", "label": "Cracked",

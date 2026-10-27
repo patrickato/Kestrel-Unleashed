@@ -29,7 +29,10 @@ def build_crack_cmd(hashfile, wordlist, potfile, rules=(), nice=15, workload=1):
 
     ``nice`` prepends ``nice -n N`` so the hashcat child yields to capture; a
     rule file (``-r``) is applied per entry in ``rules``; ``-w`` is the workload
-    profile. ``--quiet`` silences the banner; results are read back with
+    profile. ``--quiet`` silences the banner. ``--force`` is required on the Pi:
+    the only OpenCL device is the CPU via pocl, which hashcat treats as
+    unsupported and refuses to use without it (otherwise it exits non-zero
+    immediately and nothing is actually cracked). Results are read back with
     :func:`build_show_cmd`, never scraped from stdout, so a crack and the
     accounting never disagree."""
     cmd = []
@@ -45,7 +48,7 @@ def build_crack_cmd(hashfile, wordlist, potfile, rules=(), nice=15, workload=1):
     except (TypeError, ValueError):
         workload = 1
     workload = max(1, min(4, workload))
-    cmd += [HASHCAT, "-m", MODE, "-a", "0", "--quiet",
+    cmd += [HASHCAT, "-m", MODE, "-a", "0", "--quiet", "--force",
             "--potfile-path", str(potfile), "-w", str(workload)]
     for rule in rules or ():
         cmd += ["-r", str(rule)]
@@ -70,7 +73,7 @@ def build_mask_cmd(hashfile, mask, potfile, nice=15, workload=1):
         workload = max(1, min(4, int(workload)))
     except (TypeError, ValueError):
         workload = 1
-    cmd += [HASHCAT, "-m", MODE, "-a", "3", "--quiet",
+    cmd += [HASHCAT, "-m", MODE, "-a", "3", "--quiet", "--force",
             "--potfile-path", str(potfile), "-w", str(workload),
             str(hashfile), str(mask)]
     return cmd

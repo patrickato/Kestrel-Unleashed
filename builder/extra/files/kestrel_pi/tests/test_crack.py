@@ -189,6 +189,7 @@ def test_build_crack_cmd_clamps_and_prefixes():
     assert cmd[:3] == ["nice", "-n", "19"]                 # clamped to 19
     assert "-w" in cmd and cmd[cmd.index("-w") + 1] == "4"  # clamped to 4
     assert cmd[-2:] == ["/h", "/w"] and "-r" in cmd and "22000" in cmd
+    assert "--force" in cmd        # required for the Pi's CPU/pocl OpenCL device
 
 
 def test_parse_show_splits_on_last_colon():
@@ -224,6 +225,34 @@ def test_run_once_cracks_and_marks(tmp_path):
     assert state2 == "idle" and not did2
     status = readout.read_status(worker.crack_dir)
     assert status["cracked"] == 1 and status["targets"] == 2
+
+
+def test_hashcat_error_is_not_exhaustion(tmp_path):
+    # A hashcat that errors (e.g. no OpenCL device) must NOT mark the wordlist
+    # tried -- otherwise a systematic failure masquerades as "exhausted". The
+    # AP stays pending and the worker surfaces the error in its status.
+    d = str(tmp_path)
+    _write(os.path.join(d, "wordlists", "small.txt"), "hunter2!\n")
+    _write(os.path.join(d, "capture", "nets.hc22000"),
+           _hashline(AP1, "HomeWiFi") + "\n")
+    cfg = _config(d, os.path.join(d, "wordlists"))
+
+    def runner(cmd, timeout=None):
+        if "--show" in cmd:
+            return 0, "", ""
+        return 255, "", "clGetDeviceIDs(): No devices found/left"
+
+    worker = _worker(tmp_path, cfg, runner)
+    import kestrel_pi.crack.controller as ctl
+    ctl.hc.have_hashcat = lambda: True
+
+    worker.run_once()
+    aps = worker.loot.load()
+    assert aps[AP1C]["status"] == "pending"        # not falsely exhausted
+    assert not aps[AP1C].get("tried")              # the failed list is not recorded
+    status = readout.read_status(worker.crack_dir)
+    assert status["state"] == "error"
+    assert "No devices" in status["error"]
 
 
 def test_thermal_gate(tmp_path):
@@ -284,6 +313,7 @@ def test_build_mask_cmd_and_attacks():
     cmd = hashcat.build_mask_cmd("/h", "?d?d?d?d", "/pot", nice=15, workload=2)
     assert "-a" in cmd and cmd[cmd.index("-a") + 1] == "3"   # mask mode
     assert cmd[-2:] == ["/h", "?d?d?d?d"] and "22000" in cmd
+    assert "--force" in cmd        # required for the Pi's CPU/pocl OpenCL device
     # build_attacks: wordlists (dict) first, masks (mask) last
     wls = [{"name": "s.txt", "sig": "s:1:1", "path": "/s", "size": 1}]
     attacks = store_mod.build_attacks(wls, ["?d?d", "?l?l"])

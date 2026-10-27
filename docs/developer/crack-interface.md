@@ -56,13 +56,20 @@ always keeps priority.
 - **`status.json`** (world-readable) — the worker's live state for the UI:
   ```jsonc
   {"contract_version": 1, "enabled": true,
-   "state": "cracking",   // idle | cracking | paused-thermal | disabled | no-hashcat | no-wordlists
+   "state": "cracking",   // idle | cracking | paused-thermal | disabled | no-hashcat | no-wordlists | error
    "targets": 46, "cracked": 12, "pending": 30, "exhausted": 4,
    "wordlists": 3, "queue": 2, "temp_c": 61.2,
    "current": {"essid": "...", "bssid": "...", "wordlist": "...", "origin": "auto|manual"},
    "last_crack": {"essid": "...", "bssid": "...", "at": <epoch>},
+   "error": "",           // last hashcat failure (e.g. a missing OpenCL device); "" when healthy
    "updated_at": <epoch>}
   ```
+  `error` is additive (readers that ignore it are unaffected, so `contract_version`
+  stays 1). When hashcat exits with an error code (not 0 cracked / 1 exhausted /
+  124 the worker's own timeout), the worker records the message here, sets
+  `state: "error"`, and does **not** mark the wordlist tried -- so a systematic
+  failure (no OpenCL device, etc.) surfaces on the dashboard instead of
+  masquerading as `exhausted`.
 - **`queue/job-<ms>-<rand>.json`** — manual crack jobs, written by the web `/loot`
   page and `kestrel crack run` (as pi), consumed oldest-first and deleted:
   `{"files": [<abs capture paths>], "wordlist": <abs path>, "mask": <mask|"">,

@@ -151,6 +151,24 @@ template or a neutral shipped default), and logs what clients submit.
 **Release impact: reflash-class** (adds apt packages). The AP orchestration is
 not yet validated end-to-end on hardware (see `docs/developer/deferred.md`).
 
+### Fixed: on-device cracking never actually ran (hardware)
+First hardware test surfaced two bugs that together made every handshake read as
+`exhausted` within minutes without a real attempt:
+- **hashcat needs `--force` on the Pi.** The only OpenCL device is the CPU via
+  pocl, which hashcat treats as unsupported and refuses to use without `--force`
+  — so it exited non-zero immediately. `build_crack_cmd`/`build_mask_cmd` now
+  pass `--force`.
+- **An errored run was recorded as "tried."** The worker marked a wordlist tried
+  even when hashcat exited with an error, so a systematic failure masqueraded as
+  `exhausted`. `_run_attack` now reports whether hashcat genuinely completed
+  (exit 0/1/124); on an error the AP stays `pending`, the message is surfaced in
+  `status.json` (`error` field, additive — `contract_version` stays 1) and as a
+  new `error` worker state / "Last error" dashboard readout, so the real cause is
+  visible instead of a silent false exhaustion.
+
+**Release impact: app-layer-safe** (only the `kestrel_pi` package changed), but
+it ships with the next image either way.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

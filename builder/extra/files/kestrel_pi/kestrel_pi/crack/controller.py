@@ -118,6 +118,7 @@ class CrackWorker:
         self._runner = runner
         self._temp = temp_reader
         self._clock = clock
+        self._last_error = ""        # last hashcat failure, surfaced in status
         os.makedirs(crack_dir, exist_ok=True)
 
     # -- config -----------------------------------------------------------
@@ -151,17 +152,21 @@ class CrackWorker:
 
     def _run_attack(self, lines, attack, conf, rules=()):
         """Run one hashcat pass (``attack`` is a dict- or mask-attack from
-        :func:`.store.build_attacks`) over ``lines`` and return ``{bssid:
-        password}`` for everything cracked (read back via ``--show`` against the
-        shared potfile, not scraped from stdout). ``rules`` apply to a dictionary
-        attack only."""
+        :func:`.store.build_attacks`) over ``lines``. Returns ``(cracked, ok)``:
+        ``cracked`` is ``{bssid: password}`` read back via ``--show`` against the
+        shared potfile (never scraped from stdout), and ``ok`` is True only when
+        hashcat genuinely ran to completion (exit 0 cracked / 1 exhausted / 124
+        our budget). ``ok=False`` means hashcat **errored** -- the caller must NOT
+        record the wordlist as tried, or a systematic failure (e.g. no OpenCL
+        device) would masquerade as "exhausted". ``rules`` apply to a dict attack
+        only."""
         kind = attack.get("kind", "dict")
         if not lines:
-            return {}
+            return {}, True
         if kind == "dict" and not os.path.isfile(attack.get("path", "")):
-            return {}
+            return {}, True                       # missing wordlist: skip, not an error
         if kind == "mask" and not attack.get("mask"):
-            return {}
+            return {}, True
         hashfile = self._materialize(lines)
         try:
             budget = int(conf.get("max_job_seconds") or 0) or None
@@ -174,8 +179,13 @@ class CrackWorker:
                                          rules=rules, nice=conf.get("nice", 15),
                                          workload=conf.get("workload", 1))
             rc, _out, err = self._runner(cmd, timeout=budget)
-            if rc not in (0, 1, 124):  # 0 cracked, 1 exhausted, 124 our timeout
-                log.warning("hashcat exited %s: %s", rc, (err or "").strip()[:200])
+            ok = rc in (0, 1, 124)  # 0 cracked, 1 exhausted, 124 our timeout
+            if not ok:
+                msg = ("hashcat exited %s: %s" % (rc, (err or "").strip()))[:200]
+                log.warning("%s", msg)
+                self._last_error = msg
+            else:
+                self._last_error = ""
             rc2, show_out, _err2 = self._runner(
                 hc.build_show_cmd(hashfile, self.potfile))
             cracked = {}
@@ -183,7 +193,7 @@ class CrackWorker:
                 ev = parse_hashline(hashline)
                 if ev and ev.bssid:
                     cracked[ev.bssid.upper()] = password
-            return cracked
+            return cracked, ok
         finally:
             try:
                 os.remove(hashfile)
@@ -226,6 +236,10 @@ class CrackWorker:
 
         LootStore.refresh_statuses(aps, all_sigs)
         self.loot.save(aps)
+        # A hashcat failure this pass takes precedence over idle/cracking, so the
+        # dashboard shows the real error instead of a silent false "exhausted".
+        if self._last_error and state in ("idle", "cracking"):
+            state = "error"
         self._write_status(aps, conf, wordlists, masks, state, current)
         return state, did_work
 
@@ -242,7 +256,7 @@ class CrackWorker:
             for line in target["lines"]:
                 if line not in lines:
                     lines.append(line)
-        cracked = self._run_attack(lines, attack, conf, rules=rules)
+        cracked, ok = self._run_attack(lines, attack, conf, rules=rules)
         now = self._clock()
         for target in tgts:
             bssid = target["bssid"].upper()
@@ -251,7 +265,9 @@ class CrackWorker:
                 continue
             if bssid in cracked:
                 LootStore.mark_cracked(rec, cracked[bssid], attack["name"], now=now)
-            else:
+            elif ok:
+                # Only record the wordlist as tried when hashcat actually ran it;
+                # on an error we leave the AP pending so it retries once fixed.
                 LootStore.mark_tried(rec, attack["sig"])
         return {"essid": tgts[0].get("essid"), "bssid": tgts[0].get("bssid"),
                 "wordlist": attack["name"], "origin": "auto", "started": now}
@@ -280,7 +296,8 @@ class CrackWorker:
             for line in target["lines"]:
                 if line not in lines:
                     lines.append(line)
-        cracked = self._run_attack(lines, attack, conf, rules=rules) if lines else {}
+        cracked, ok = self._run_attack(lines, attack, conf, rules=rules) \
+            if lines else ({}, True)
         now = self._clock()
         for target in targets:
             bssid = target["bssid"].upper()
@@ -289,7 +306,7 @@ class CrackWorker:
                 continue
             if bssid in cracked:
                 LootStore.mark_cracked(rec, cracked[bssid], attack["name"], now=now)
-            elif attack["sig"]:
+            elif attack["sig"] and ok:
                 LootStore.mark_tried(rec, attack["sig"])
         store_mod.remove_job(path)
         return {"essid": job.get("label") or attack["name"], "bssid": "",
@@ -326,6 +343,7 @@ class CrackWorker:
             "temp_c": self._temp(),
             "current": current,
             "last_crack": last,
+            "error": self._last_error or "",
             "updated_at": self._clock(),
         }
         store_mod._write_json_atomic(
