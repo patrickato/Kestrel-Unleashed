@@ -400,6 +400,137 @@ def test_capture_refused_while_web_auth_is_off(env, monkeypatch):
     assert calls == []
 
 
+# -- WPS scan/attack from the web (Kestrel-Unleashed) -----------------------
+def _stub_wps(monkeypatch, ok=True):
+    calls = []
+
+    def fake(args):
+        calls.append(list(args))
+        return ({"ok": True, "wps": args[1], "restart": False} if ok
+                else {"ok": False, "error": "could not start"})
+
+    monkeypatch.setattr(ctl, "run_wps", fake)
+    return calls
+
+
+def test_wps_scan_launches_without_an_ack(env, monkeypatch):
+    _auth_on(env)
+    calls = _stub_wps(monkeypatch)
+    reply = ctl.apply_change({"target": "wps", "action": "scan"})
+    assert reply["ok"] is True
+    assert calls == [["wps", "scan"]]       # scanning is passive -- no ack
+
+
+def test_wps_attack_needs_the_ack_before_launching(env, monkeypatch):
+    _auth_on(env)
+    calls = _stub_wps(monkeypatch)
+    reply = ctl.apply_change({"target": "wps", "action": "attack",
+                              "bssid": "AA:BB:CC:DD:EE:FF"})
+    assert reply["ok"] is False and reply.get("need_ack") is True
+    assert calls == []
+
+
+def test_wps_attack_with_ack_launches_upper_cased_argv(env, monkeypatch):
+    _auth_on(env)
+    calls = _stub_wps(monkeypatch)
+    reply = ctl.apply_change({"target": "wps", "action": "attack",
+                              "bssid": "aa:bb:cc:dd:ee:ff", "ack": True})
+    assert reply["ok"] is True
+    # upper-cased, each token its own argv item (no shell), with --yes
+    assert calls == [["wps", "attack", "AA:BB:CC:DD:EE:FF", "--yes"]]
+
+
+def test_wps_attack_rejects_a_bad_bssid(env, monkeypatch):
+    _auth_on(env)
+    calls = _stub_wps(monkeypatch)
+    for bad in ("", "nope", "AA:BB:CC:DD:EE",
+                "AA:BB:CC:DD:EE:FF; rm -rf /", "ZZ:BB:CC:DD:EE:FF"):
+        reply = ctl.apply_change({"target": "wps", "action": "attack",
+                                  "bssid": bad, "ack": True})
+        assert reply["ok"] is False
+    assert calls == []                      # never launched for a bad target
+
+
+def test_wps_attack_skips_ack_when_already_acknowledged(env, monkeypatch):
+    _auth_on(env)
+    (env / "capture-ack").write_text("acknowledged\n")   # the shared ACK_FILE
+    calls = _stub_wps(monkeypatch)
+    reply = ctl.apply_change({"target": "wps", "action": "attack",
+                              "bssid": "AA:BB:CC:DD:EE:FF"})
+    assert reply["ok"] is True
+    assert calls == [["wps", "attack", "AA:BB:CC:DD:EE:FF", "--yes"]]
+
+
+def test_wps_refused_while_web_auth_is_off(env, monkeypatch):
+    cs.set_value(str(env / "config.toml"), "web", "auth", '"none"')
+    calls = _stub_wps(monkeypatch)
+    reply = ctl.apply_change({"target": "wps", "action": "scan"})
+    assert reply["ok"] is False and "web auth" in reply["error"]
+    assert calls == []
+
+
+def test_wps_run_builds_a_fixed_name_background_unit(env, monkeypatch):
+    seen = {}
+
+    class _P:
+        returncode, stdout, stderr = 0, "", ""
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = list(cmd)
+        return _P()
+
+    monkeypatch.setattr(ctl.subprocess, "run", fake_run)
+    reply = ctl.run_wps(["wps", "scan"])
+    assert reply["ok"] is True
+    assert seen["cmd"][:5] == ["systemd-run", "--quiet", "--collect",
+                               "--unit=kestrel-wps-run", ctl.PWN_TOOL]
+    assert seen["cmd"][5:] == ["wps", "scan"]
+
+
+# -- evil-portal start/stop from the web (Kestrel-Unleashed) ----------------
+def test_portal_start_needs_the_ack(env, monkeypatch):
+    _auth_on(env)
+    calls = _stub_cli(monkeypatch)
+    reply = ctl.apply_change({"target": "evil-portal", "action": "start"})
+    assert reply["ok"] is False and reply.get("need_ack") is True
+    assert calls == []
+
+
+def test_portal_start_with_ack_runs_the_cli(env, monkeypatch):
+    _auth_on(env)
+    calls = _stub_cli(monkeypatch, out="evil-portal started")
+    reply = ctl.apply_change({"target": "evil-portal", "action": "start",
+                              "ack": True})
+    assert reply == {"ok": True, "evil_portal": "start", "restart": False}
+    assert calls == [["evil-portal", "start", "--yes"]]
+
+
+def test_portal_start_skips_ack_when_already_acknowledged(env, monkeypatch):
+    _auth_on(env)
+    (env / "capture-ack").write_text("acknowledged\n")
+    calls = _stub_cli(monkeypatch, out="evil-portal started")
+    reply = ctl.apply_change({"target": "evil-portal", "action": "start"})
+    assert reply["ok"] is True
+    assert calls == [["evil-portal", "start", "--yes"]]
+
+
+def test_portal_stop_runs_the_cli(env, monkeypatch):
+    _auth_on(env)
+    calls = _stub_cli(monkeypatch, out="evil-portal stopped")
+    reply = ctl.apply_change({"target": "evil-portal", "action": "stop"})
+    assert reply == {"ok": True, "evil_portal": "stop", "restart": False}
+    assert calls == [["evil-portal", "stop"]]
+
+
+def test_portal_refused_while_web_auth_is_off(env, monkeypatch):
+    cs.set_value(str(env / "config.toml"), "web", "auth", '"none"')
+    calls = _stub_cli(monkeypatch)
+    reply = ctl.apply_change({"target": "evil-portal", "action": "start",
+                              "ack": True})
+    assert reply["ok"] is False and "web auth" in reply["error"]
+    assert calls == []
+
+
 # -- reboot / shutdown from the web (Phase 3.5) -----------------------------
 def test_power_reboot_returns_the_power_flag(env):
     _auth_on(env)

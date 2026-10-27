@@ -235,6 +235,45 @@ dormant, still-tested module for a future GPU host; `[crack] kernel_accel`/
 **Release impact: reflash-class** (swaps apt packages), and app-layer-updatable
 for the worker code once the packages are on the image.
 
+### Added: point-and-click web controls for WPS, evil-portal and crack suggestions
+Everything added above was reachable from the terminal; this wires the three
+offensive features into the dashboard so they are point-and-click on a phone or
+the device's own kiosk screen, with the same auth + authorized-use gating as the
+capture toggle (read-only when `[web] auth` is off).
+
+- **WPS page (`/wps`)**: a *WPS attacks* dashboard card → a page with a **Scan
+  for WPS APs** button and, per result, an **Attack** button (reaver /
+  Pixie-Dust). Long-running scan/attack launch in the background as a fixed-name
+  transient unit (`systemd-run --unit=kestrel-wps-run`, so a second run while one
+  is active is refused rather than fighting over the one radio); the page shows
+  the live state (idle/scanning/attacking) from a CLI-written state file and
+  self-refreshes while busy. The `kestrel wps` CLI now records that state and its
+  last scan output under `/var/lib/kestrel/wps/`.
+- **Evil-portal page (`/portal`)**: an *Evil-portal* card → a page showing the
+  live service state and SSID/channel, **Start**/**Stop** buttons (Start takes
+  the ack), and — because they are plaintext — the captured submissions, shown
+  **only with web auth on** (like the wpa-sec "Show" view). This closes the
+  "show captured submissions on the dashboard" deferred item.
+- **One-click crack suggestions on `/loot`**: the suggested-attack column is now
+  a **Run** button (web auth on) that queues exactly that attack — the device
+  default mask or wordlist — against just that AP (via the new
+  `CaptureInterface.files_for_bssid()`), no typing.
+- Root side (`plugins-ctl.py`, runs as root): new `apply_wps` / `apply_evil-portal`
+  apply targets behind the existing `kestrel-plugins-apply.socket`. They validate
+  the BSSID strictly (regex, argv not shell), enforce the shared `capture-ack`,
+  and shell only to the trusted root CLI — a web button grants no privilege the
+  terminal didn't. `config.yml` creates the root-owned, world-readable
+  `/var/lib/kestrel/wps` state dir.
+
+**Release impact:** the *feature code* is app-layer-safe — all of it is
+`kestrel_pi` package code, `plugins-ctl.py` and `kestrel.sh`, which the in-place
+engine carries into a running device, and the new `/var/lib/kestrel/wps` state
+dir is created by the CLI on first use, so an app-layer update gets the feature
+with no new lib script or apt package. The only build hunk is a `file:`-created
+directory in `config.yml`, which trips `update_kind=auto` to **reflash** — but
+this release is already reflash-class for the aircrack apt swap above, so it
+rides along at no extra cost (leave `update_kind=auto`, or force `reflash`).
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

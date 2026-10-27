@@ -149,6 +149,9 @@ The page is plain HTTP on the management link, so a login travels unencrypted th
 - Plugin cards: each enabled readout plugin contributes a card (battery, memory and temperature, upload status, and so on). Drag cards to reorder them; the order is remembered in your browser.
 - AI Agent: a compact card showing whether the learning agent is on and which policy it uses. Tap it to open the agent page.
 - Captured networks: a searchable, paginated page with two views you can toggle between — **by network** (one row per SSID, with its distinct-BSSID count and handshakes) and **by access point** (one row per BSSID, so APs that reuse a name stay separate; search also matches a pasted BSSID). It opens on the view matching your `[capture.output] mode` and reads the whole store either way, so it scales to thousands of networks. Sort by name (default) or by most recently captured; a **last seen** column shows when each last produced a new handshake (captures from before this feature show the file's time, or "never").
+- Loot: the recovered passwords, the crack worker's live state, a suggested attack (with a one-tap Run button, login on) per not-yet-cracked network, and a form to queue more cracking. See [On-device quick-crack](#on-device-quick-crack).
+- WPS attacks: scan for WPS-enabled APs and attack one with a tap. See [WPS attacks](#wps-attacks).
+- Evil-portal: start/stop the captive-portal rogue AP and see what clients submitted. See [Evil-portal](#evil-portal).
 - Whitelist: directly below Captured networks, the APs that are never actively attacked. It is searchable, and with a login you can add an AP (an ESSID, or a BSSID like `AA:BB:CC:DD:EE:FF`) or remove one straight from the page; a change takes effect the next time capture starts.
 
 The read-only view auto-refreshes every `refresh_seconds` (default 30; set 0 to disable) and will not reload a form under you.
@@ -290,7 +293,7 @@ For a random **all-numeric** router key that no wordlist holds, use a brute-forc
 
 ### Seeing and driving it
 
-The dashboard's **Loot** card (→ *Loot* page) lists every captured network, its device type and BSSID, and — for the ones it cracked — the password in cleartext. With the dashboard login on, the same page lets you tick one or more capture files and queue them against a chosen wordlist or ruleset: the easy way to throw a bigger list at whatever has not cracked yet, from your phone or the device's own screen.
+The dashboard's **Loot** card (→ *Loot* page) lists every captured network, its device type and BSSID, and — for the ones it cracked — the password in cleartext. Each not-yet-cracked row shows the **suggested** attack for that kind of device, and with the dashboard login on that suggestion is a one-tap **Run** button: tap it and Kestrel queues exactly that attack (the device-default wordlist or the right mask) against just that network — no typing. The same page also lets you tick one or more capture files and queue them against a chosen wordlist or ruleset: the easy way to throw a bigger list at whatever has not cracked yet, from your phone or the device's own screen.
 
 From the terminal:
 
@@ -313,7 +316,9 @@ Once a network yields a crackable handshake, capturing leaves it alone (one is e
 
 Many home routers leave **WPS** on, and a WPS access point can be made to hand over its WPA passphrase. The offline **Pixie-Dust** attack (the default) recovers it in seconds-to-minutes when the router is vulnerable; a slow online PIN brute force is the `--no-pixie` fallback. A recovered key shows up on the **Loot** page and in `kestrel crack list` just like a cracked handshake, tagged `via WPS`.
 
-It uses the **capture dongle** (not the Pi's built-in Wi-Fi) and **pauses capture** while it runs — one radio, one job at a time. There is no always-on service; it only does something when you run it:
+It uses the **capture dongle** (not the Pi's built-in Wi-Fi) and **pauses capture** while it runs — one radio, one job at a time. There is no always-on service; it only does something when you run it.
+
+From the dashboard (with the login on): the **WPS attacks** card (→ *WPS attacks* page) has a **Scan for WPS APs** button; the results list each WPS AP with an **Attack** button beside it (first attack asks the acknowledgment). The page shows when a scan or attack is running and refreshes itself, and a recovered key lands on the Loot page. From the terminal:
 
 ```bash
 sudo kestrel wps scan                      # find WPS-enabled APs nearby
@@ -330,6 +335,8 @@ If an attack says "no key recovered", the AP is most likely WPS-locked (the scan
 **Lab / authorized use only — this transmits and captures what people type.** Run it only against a network you own or are authorized to assess; it asks for the authorized-use acknowledgment first. Serve pages that are honestly your own — **do not** imitate a real company or its login.
 
 Evil-portal stands up a generic captive portal: an **open Wi-Fi** on the capture dongle, a catch-all DNS that points every lookup at the device, and a **portal page** — the one you supply, or a neutral built-in — that **logs every field** a client submits. It uses the capture dongle in AP mode (it must support AP mode) and **pauses capture** while it runs; it never starts on its own.
+
+From the dashboard (with the login on): the **Evil-portal** card (→ *Evil-portal* page) shows whether the portal is running and its SSID/channel, has **Start portal** / **Stop portal** buttons (Start asks the acknowledgment), and — because the submissions are plaintext — lists what clients submitted right on the page, but only while the dashboard login is on. From the terminal:
 
 ```bash
 sudo kestrel evil-portal start     # open AP + portal (asks the ack, pauses capture)

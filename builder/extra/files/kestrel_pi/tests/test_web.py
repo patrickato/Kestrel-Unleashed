@@ -697,9 +697,12 @@ class _FakeLoader:
 
 
 class _FakeCapture:
-    def __init__(self, networks, access_points=None):
+    def __init__(self, networks, access_points=None, hashline_files=None,
+                 bssid_files=None):
         self._networks = networks
         self._access_points = access_points or []
+        self._hashline_files = hashline_files or []
+        self._bssid_files = bssid_files or {}
 
     def captured_networks(self):
         return self._networks
@@ -707,10 +710,17 @@ class _FakeCapture:
     def captured_access_points(self):
         return self._access_points
 
+    def hashline_files(self):
+        return list(self._hashline_files)
+
+    def files_for_bssid(self, bssid):
+        return list(self._bssid_files.get((bssid or "").upper(), []))
+
 
 class _FakeDaemon:
     def __init__(self, web_cfg, plugin_table, networks=None,
-                 access_points=None, output_mode=None):
+                 access_points=None, output_mode=None, crack=None,
+                 hashline_files=None, bssid_files=None):
         import logging
         from kestrel_pi.loader import PluginRecord
 
@@ -723,7 +733,11 @@ class _FakeDaemon:
         self.config = {"web": web_cfg, "plugins": {"wpa-sec": plugin_table}}
         if output_mode is not None:
             self.config["capture"] = {"output": {"mode": output_mode}}
-        self.capture = _FakeCapture(networks or [], access_points)
+        if crack is not None:
+            self.config["crack"] = crack
+        self.capture = _FakeCapture(networks or [], access_points,
+                                    hashline_files=hashline_files,
+                                    bssid_files=bssid_files)
 
     def _fresh_config(self):
         return self.config
@@ -744,7 +758,8 @@ def _basic(user="pi", password="hunter2"):
 
 
 def _client(monkeypatch, tmp_path, web_cfg, table=None, replies=None, networks=None,
-            access_points=None, output_mode=None):
+            access_points=None, output_mode=None, crack=None, hashline_files=None,
+            bssid_files=None):
     pytest.importorskip("flask")
     sent = []
 
@@ -757,9 +772,12 @@ def _client(monkeypatch, tmp_path, web_cfg, table=None, replies=None, networks=N
     # Don't shell out to `ip` during tests; the address disclosure is covered
     # on its own in test_dashboard_shows_management_addresses.
     monkeypatch.setattr(web, "iface_ipv4", lambda iface: None)
+    # The evil-portal state is read via systemctl; keep tests off the real one.
+    monkeypatch.setattr(web, "_service_active", lambda name: False)
     daemon = _FakeDaemon(web_cfg, table if table is not None else {"enabled": False},
                          networks=networks, access_points=access_points,
-                         output_mode=output_mode)
+                         output_mode=output_mode, crack=crack,
+                         hashline_files=hashline_files, bssid_files=bssid_files)
     return web.create_app(daemon).test_client(), sent
 
 
@@ -850,6 +868,167 @@ def test_refused_save_keeps_entries_but_not_the_secret(monkeypatch, tmp_path):
     assert resp.status_code == 400 and "confirm authorized use" in body
     assert 'value="12"' in body and 'name="enabled" checked' in body
     assert "TYPEDSECRET" not in body
+
+
+# -- WPS tool page (/wps) -----------------------------------------------------
+def test_wps_page_is_read_only_when_auth_off(monkeypatch, tmp_path):
+    client, sent = _client(monkeypatch, tmp_path, {"auth": "none"})
+    body = client.get("/wps").get_data(as_text=True)
+    assert "WPS attacks" in body and "Turn web controls on" in body
+    # a control POST is refused read-only
+    assert client.post("/wps", data={"action": "scan"}).status_code == 403
+    assert sent == []
+
+
+def test_wps_scan_posts_the_change(monkeypatch, tmp_path):
+    client, sent = _client(monkeypatch, tmp_path, BASIC)
+    token = _csrf(client.get("/wps", headers=_basic()).get_data(as_text=True))
+    resp = client.post("/wps", headers=_basic(),
+                       data={"csrf": token, "action": "scan"})
+    assert resp.status_code == 200
+    assert sent == [{"target": "wps", "action": "scan"}]
+
+
+def test_wps_attack_rejects_a_bad_bssid_without_applying(monkeypatch, tmp_path):
+    client, sent = _client(monkeypatch, tmp_path, BASIC)
+    token = _csrf(client.get("/wps", headers=_basic()).get_data(as_text=True))
+    resp = client.post("/wps", headers=_basic(),
+                       data={"csrf": token, "action": "attack", "bssid": "nope"})
+    assert resp.status_code == 400 and sent == []
+
+
+def test_wps_attack_need_ack_shows_confirm(monkeypatch, tmp_path):
+    client, sent = _client(monkeypatch, tmp_path, BASIC,
+                           replies=[{"ok": False, "need_ack": True,
+                                     "error": "confirm authorized use"}])
+    token = _csrf(client.get("/wps", headers=_basic()).get_data(as_text=True))
+    resp = client.post("/wps", headers=_basic(),
+                       data={"csrf": token, "action": "attack",
+                             "bssid": "AA:BB:CC:DD:EE:FF"})
+    body = resp.get_data(as_text=True)
+    assert "Attack AA:BB:CC:DD:EE:FF?" in body and "I am authorized" in body
+    assert sent == [{"target": "wps", "action": "attack",
+                     "bssid": "AA:BB:CC:DD:EE:FF"}]
+
+
+def test_wps_attack_with_ack_applies_the_upper_cased_bssid(monkeypatch, tmp_path):
+    client, sent = _client(monkeypatch, tmp_path, BASIC,
+                           replies=[{"ok": True, "wps": "attack"}])
+    token = _csrf(client.get("/wps", headers=_basic()).get_data(as_text=True))
+    resp = client.post("/wps", headers=_basic(),
+                       data={"csrf": token, "action": "attack",
+                             "bssid": "aa:bb:cc:dd:ee:ff", "ack": "yes"})
+    assert resp.status_code == 200
+    assert sent == [{"target": "wps", "action": "attack",
+                     "bssid": "AA:BB:CC:DD:EE:FF", "ack": True}]
+
+
+# -- evil-portal page (/portal) -----------------------------------------------
+def test_portal_page_is_read_only_when_auth_off(monkeypatch, tmp_path):
+    client, sent = _client(monkeypatch, tmp_path, {"auth": "none"})
+    body = client.get("/portal").get_data(as_text=True)
+    assert "Evil-portal" in body and "Stopped" in body
+    assert "Turn web controls on" in body
+    assert client.post("/portal", data={"action": "start"}).status_code == 403
+    assert sent == []
+
+
+def test_portal_hides_submissions_when_auth_off(monkeypatch, tmp_path):
+    creds = tmp_path / "creds.jsonl"
+    creds.write_text('{"ts": 0, "client": "10.0.0.5", '
+                     '"fields": {"user": "bob", "pass": "s3cret"}}\n')
+    monkeypatch.setattr(web, "EVIL_PORTAL_CREDS", str(creds))
+    client, _ = _client(monkeypatch, tmp_path, {"auth": "none"})
+    body = client.get("/portal").get_data(as_text=True)
+    assert "s3cret" not in body            # plaintext submissions hidden read-only
+
+
+def test_portal_shows_submissions_with_auth_on(monkeypatch, tmp_path):
+    creds = tmp_path / "creds.jsonl"
+    creds.write_text('{"ts": 0, "client": "10.0.0.5", '
+                     '"fields": {"user": "bob", "pass": "s3cret"}}\n')
+    monkeypatch.setattr(web, "EVIL_PORTAL_CREDS", str(creds))
+    client, _ = _client(monkeypatch, tmp_path, BASIC)
+    body = client.get("/portal", headers=_basic()).get_data(as_text=True)
+    assert "Captured submissions" in body and "s3cret" in body and "10.0.0.5" in body
+
+
+def test_portal_start_need_ack_shows_confirm(monkeypatch, tmp_path):
+    client, sent = _client(monkeypatch, tmp_path, BASIC,
+                           replies=[{"ok": False, "need_ack": True,
+                                     "error": "confirm authorized use"}])
+    token = _csrf(client.get("/portal", headers=_basic()).get_data(as_text=True))
+    resp = client.post("/portal", headers=_basic(),
+                       data={"csrf": token, "action": "start"})
+    body = resp.get_data(as_text=True)
+    assert "Start the evil-portal?" in body and "I am authorized" in body
+    assert sent == [{"target": "evil-portal", "action": "start"}]
+
+
+def test_portal_start_with_ack_then_stop(monkeypatch, tmp_path):
+    client, sent = _client(monkeypatch, tmp_path, BASIC,
+                           replies=[{"ok": True, "evil_portal": "start"},
+                                    {"ok": True, "evil_portal": "stop"}])
+    token = _csrf(client.get("/portal", headers=_basic()).get_data(as_text=True))
+    client.post("/portal", headers=_basic(),
+                data={"csrf": token, "action": "start", "ack": "yes"})
+    client.post("/portal", headers=_basic(),
+                data={"csrf": token, "action": "stop"})
+    assert sent == [{"target": "evil-portal", "action": "start", "ack": True},
+                    {"target": "evil-portal", "action": "stop"}]
+
+
+# -- /loot one-click "run the suggested attack" -------------------------------
+def test_loot_run_suggested_queues_the_right_job(monkeypatch, tmp_path):
+    from kestrel_pi.crack import store as crack_store
+
+    crackdir = tmp_path / "crack"
+    crackdir.mkdir()
+    monkeypatch.setattr(web, "CRACK_DIR", str(crackdir))
+    # One pending AP in the loot store; its generic suggestion's first runnable
+    # attack is the 8-digit numeric mask (no wordlist needed).
+    store = crack_store.LootStore(str(crackdir))
+    aps = {}
+    crack_store.LootStore.upsert(
+        aps, {"bssid": "AA:BB:CC:DD:EE:FF", "essid": "somenet", "hashlines": 1},
+        now=1)
+    store.save(aps)
+
+    client, sent = _client(
+        monkeypatch, tmp_path, BASIC,
+        hashline_files=["/x/somenet.hc22000"],
+        bssid_files={"AA:BB:CC:DD:EE:FF": ["/x/somenet.hc22000"]})
+    page = client.get("/loot", headers=_basic()).get_data(as_text=True)
+    # the suggested cell is a one-tap Run button when controls are on
+    assert 'name="suggest" value="AA:BB:CC:DD:EE:FF"' in page
+    resp = client.post("/loot", headers=_basic(),
+                       data={"csrf": _csrf(page),
+                             "suggest": "AA:BB:CC:DD:EE:FF"},
+                       follow_redirects=False)
+    assert resp.status_code == 303        # queued, back to /loot with a banner
+    jobs = crack_store.list_jobs(str(crackdir))
+    assert len(jobs) == 1
+    _path, job = jobs[0]
+    assert job["mask"] == "?d?d?d?d?d?d?d?d"
+    assert job["files"] == ["/x/somenet.hc22000"]
+    assert job["label"] == "suggest:somenet"
+
+
+def test_loot_run_suggested_rejects_unknown_ap(monkeypatch, tmp_path):
+    from kestrel_pi.crack import store as crack_store
+
+    crackdir = tmp_path / "crack"
+    crackdir.mkdir()
+    monkeypatch.setattr(web, "CRACK_DIR", str(crackdir))
+    crack_store.LootStore(str(crackdir)).save({})
+    client, _ = _client(monkeypatch, tmp_path, BASIC)
+    # No form on the page to grab a token from, so fetch one from the dashboard.
+    token = _csrf(client.get("/", headers=_basic()).get_data(as_text=True))
+    resp = client.post("/loot", headers=_basic(),
+                       data={"csrf": token, "suggest": "AA:BB:CC:DD:EE:FF"},
+                       follow_redirects=True)
+    assert "Unknown access point" in resp.get_data(as_text=True)
+    assert crack_store.list_jobs(str(crackdir)) == []
 
 
 # -- advanced Settings page ---------------------------------------------------

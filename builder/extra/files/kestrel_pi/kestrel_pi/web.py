@@ -39,6 +39,7 @@ import time
 from urllib.parse import quote, urlencode
 
 from . import config_catalog
+from . import evilportal
 from .applyclient import APPLY_SOCKET, apply_change
 from .connectivity import MANAGEMENT_INTERFACES
 from .crack import CRACK_DEFAULTS, CRACK_DIR
@@ -63,11 +64,34 @@ CAPTURE_ACK_TEXT = (
     "WPA handshakes. Enable it only against networks you own or are explicitly "
     "authorized to test. Unauthorized use may be illegal."
 )
+WPS_ACK_TEXT = (
+    "A WPS attack transmits at the chosen access point (reaver / Pixie-Dust) to "
+    "recover its PIN and WPA key. Run it only against an AP you own or are "
+    "explicitly authorized to test. Unauthorized use may be illegal."
+)
+PORTAL_ACK_TEXT = (
+    "The evil-portal stands up an open rogue Wi-Fi on the capture dongle, answers "
+    "all DNS to itself, and logs what clients submit. Run it only where you are "
+    "explicitly authorized to. Unauthorized use may be illegal."
+)
 CONTROLS_OFF = (
     "Plugin controls are off: web auth is \"none\", so the page is read-only. "
     "The controls use the device login; turn them on with: "
     "sudo kestrel web auth system"
 )
+# The WPS tool's state, written by the `kestrel wps` CLI (idle | scanning |
+# attacking <bssid>) and its last scan output, both world-readable so the daemon
+# (pi) can read them for the /wps page. Never hold a secret -- recovered keys go
+# to the loot store, which /loot shows.
+WPS_DIR = "/var/lib/kestrel/wps"
+WPS_STATE_FILE = os.path.join(WPS_DIR, "state")
+WPS_SCAN_FILE = os.path.join(WPS_DIR, "scan.txt")
+# The evil-portal's run dir (captured submissions) and its start-on-demand
+# service, for the /portal page. Submissions are plaintext, so the page shows
+# them only when web auth is on (like the wpa-sec "Show" view).
+EVIL_PORTAL_DIR = "/var/lib/kestrel/evil-portal"
+EVIL_PORTAL_CREDS = os.path.join(EVIL_PORTAL_DIR, "creds.jsonl")
+EVIL_PORTAL_SERVICE = "kestrel-evil-portal.service"
 # Shared state the `updates` plugin writes (installed vs latest release, whether
 # an in-place update is offerable). The dashboard reads it to decide whether to
 # show the upgrade button; the root helper re-verifies before applying.
@@ -635,6 +659,61 @@ def create_app(daemon):
                        for p in daemon.capture.hashline_files()}
         lists = crack_wordlists.discover(wdir, order)
         by_name = {w["name"]: w["path"] for w in lists}
+
+        # One-click "run the suggested attack" for a single AP (the Run button in
+        # the loot table's suggested column). It carries just the BSSID; the
+        # server recomputes the suggestion, takes its first runnable attack (a
+        # mask or an installed wordlist -- never an advisory keygen), finds the
+        # capture file(s) that hold that AP's handshake, and queues exactly that
+        # job. Validated against the real loot store and wordlist set, like the
+        # manual form below.
+        suggest_bssid = (request.form.get("suggest") or "").strip().upper()
+        if suggest_bssid:
+            if not _WPS_MAC_RE.match(suggest_bssid):
+                return _loot_redirect(ctl, "Not a valid BSSID.", err=True)
+            aps = crack_store.LootStore(CRACK_DIR).load()
+            rec = aps.get(suggest_bssid)
+            if rec is None:
+                return _loot_redirect(ctl, "Unknown access point.", err=True)
+            if rec.get("status") == "cracked":
+                return _loot_redirect(ctl, "That network is already cracked.")
+            have_defaults = os.path.isfile(
+                os.path.join(wdir, crack_suggest.DEFAULTS_LIST))
+            sug = crack_suggest.suggest(essid=rec.get("essid") or "",
+                                        bssid=suggest_bssid,
+                                        vendor=rec.get("vendor") or "",
+                                        have_defaults=have_defaults)
+            runnable = next((a for a in sug["attacks"] if a.get("runnable")), None)
+            who = rec.get("essid") or suggest_bssid
+            if runnable is None:
+                return _loot_redirect(
+                    ctl, "No one-click attack for %s — it needs an external "
+                    "keygen; see its suggestion on the loot page." % who, err=True)
+            files = daemon.capture.files_for_bssid(suggest_bssid)
+            if not files:
+                return _loot_redirect(
+                    ctl, "No capture file holds a handshake for %s yet." % who,
+                    err=True)
+            if runnable["kind"] == "mask":
+                crack_store.enqueue_job(CRACK_DIR, files, mask=runnable["value"],
+                                        label="suggest:%s" % who)
+                msg = ("Queued the suggested attack for %s: %s (%s)."
+                       % (who, runnable["label"], runnable["value"]))
+            else:   # wordlist
+                wpath = (by_name.get(runnable["value"])
+                         or os.path.join(wdir, runnable["value"]))
+                if not os.path.isfile(wpath):
+                    return _loot_redirect(
+                        ctl, "The suggested wordlist (%s) isn't installed yet."
+                        % runnable["value"], err=True)
+                crack_store.enqueue_job(CRACK_DIR, files, wpath,
+                                        label="suggest:%s" % who)
+                msg = ("Queued the suggested list for %s: %s."
+                       % (who, runnable["value"]))
+            if not bool(crack_cfg.get("enabled", True)):
+                msg += " Note: quick-crack is off; enable it to process the queue."
+            return _loot_redirect(ctl, msg)
+
         picked = [valid_files[n] for n in request.form.getlist("file")
                   if n in valid_files]
         if not picked:
@@ -679,6 +758,89 @@ def create_app(daemon):
             msg += (" Note: quick-crack is off; run 'kestrel crack enable' to "
                     "process the queue.")
         return _loot_redirect(ctl, msg)
+
+    @app.get("/wps")
+    def wps_page():  # noqa: ANN202
+        return html(_render_wps(control(),
+                                message=request.args.get("err")
+                                or request.args.get("msg"),
+                                error=bool(request.args.get("err"))))
+
+    @app.post("/wps")
+    def wps_submit():  # noqa: ANN202
+        ctl = control()
+        if not ctl["ready"]:
+            return html(_render_wps(ctl, message=CONTROLS_OFF, error=True), 403)
+        if not _same(request.form.get("csrf") or "", csrf_token):
+            return html(_render_wps(
+                ctl, error=True,
+                message="This page is out of date (the daemon restarted); "
+                        "try again."), 400)
+        action = request.form.get("action")
+        if action == "scan":
+            reply = apply_change({"target": "wps", "action": "scan"})
+            if reply.get("ok"):
+                return html(_render_wps(control(),
+                            message="Scanning for WPS access points; results "
+                                    "appear in a few seconds."))
+            return html(_render_wps(ctl, error=True,
+                        message=reply.get("error") or "not applied"), 400)
+        if action == "attack":
+            bssid = (request.form.get("bssid") or "").strip().upper()
+            if not _WPS_MAC_RE.match(bssid):
+                return html(_render_wps(ctl, error=True,
+                            message="Not a valid BSSID."), 400)
+            change = {"target": "wps", "action": "attack", "bssid": bssid}
+            if request.form.get("ack") == "yes":
+                change["ack"] = True
+            reply = apply_change(change)
+            if reply.get("ok"):
+                return html(_render_wps(
+                    control(),
+                    message="Attacking %s; reaver can take many minutes. The "
+                            "recovered key (if any) lands on the Loot page."
+                            % bssid))
+            if reply.get("need_ack"):
+                return html(_render_wps_attack_confirm(
+                    ctl, bssid, reply.get("error") or ""))
+            return html(_render_wps(ctl, error=True,
+                        message=reply.get("error") or "not applied"), 400)
+        return html(_render_wps(ctl, message="Nothing changed."))
+
+    @app.get("/portal")
+    def portal_page():  # noqa: ANN202
+        return html(_render_portal(daemon, control(),
+                                   message=request.args.get("err")
+                                   or request.args.get("msg"),
+                                   error=bool(request.args.get("err"))))
+
+    @app.post("/portal")
+    def portal_submit():  # noqa: ANN202
+        ctl = control()
+        if not ctl["ready"]:
+            return html(_render_portal(daemon, ctl, message=CONTROLS_OFF,
+                                       error=True), 403)
+        if not _same(request.form.get("csrf") or "", csrf_token):
+            return html(_render_portal(
+                daemon, ctl, error=True,
+                message="This page is out of date (the daemon restarted); "
+                        "try again."), 400)
+        action = request.form.get("action")
+        if action not in ("start", "stop"):
+            return html(_render_portal(daemon, ctl, message="Nothing changed."))
+        change = {"target": "evil-portal", "action": action}
+        if action == "start" and request.form.get("ack") == "yes":
+            change["ack"] = True
+        reply = apply_change(change)
+        if reply.get("ok"):
+            verb = "started" if action == "start" else "stopped"
+            return html(_render_portal(daemon, control(),
+                        message="Evil-portal %s." % verb))
+        if reply.get("need_ack"):
+            return html(_render_portal_start_confirm(
+                ctl, reply.get("error") or ""))
+        return html(_render_portal(daemon, ctl, error=True,
+                    message=reply.get("error") or "not applied"), 400)
 
     @app.get("/settings")
     def settings_page():  # noqa: ANN202
@@ -1855,6 +2017,100 @@ def _capture_toggle(cap, control):
     )
 
 
+# --- WPS tool (/wps) and evil-portal (/portal) helpers ----------------------
+
+_WPS_MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+# A wash scan line: a BSSID, then a channel number, then the rest kept verbatim
+# (wash's column layout -- dBm/WPS version/Lck/vendor/ESSID -- varies by build,
+# so we show the tail as-is rather than over-parse it).
+_WPS_LINE_RE = re.compile(
+    r"^\s*([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+(\d+)\s+(.*)$")
+
+
+def _service_active(name):
+    """True when systemd reports ``name`` active. The evil-portal is a start-on-
+    demand service, so its state is read live here (like capture's)."""
+    try:
+        out = subprocess.run(["systemctl", "is-active", name],
+                             capture_output=True, text=True, timeout=5,
+                             check=False).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out == "active"
+
+
+def _wps_state():
+    """The WPS tool's live state as ``(word, bssid)`` -- ``('idle','')``,
+    ``('scanning','')`` or ``('attacking','AA:BB:..')`` -- from the CLI-written
+    state file. Absent/unreadable/garbled reads as idle."""
+    try:
+        with open(WPS_STATE_FILE, "r", encoding="utf-8") as fh:
+            raw = fh.read().strip()
+    except OSError:
+        return ("idle", "")
+    parts = raw.split()
+    word = parts[0] if parts else "idle"
+    if word not in ("idle", "scanning", "attacking"):
+        word = "idle"
+    bssid = (parts[1].upper() if len(parts) > 1 and _WPS_MAC_RE.match(parts[1])
+             else "")
+    return (word, bssid)
+
+
+def _wps_scan_rows():
+    """Parse the last ``kestrel wps scan`` output (wash) into
+    ``[{bssid, channel, info}]`` for the /wps table -- best-effort, one row per
+    distinct BSSID. Empty when there is no scan file yet."""
+    rows, seen = [], set()
+    try:
+        with open(WPS_SCAN_FILE, "r", encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return rows
+    for line in lines:
+        m = _WPS_LINE_RE.match(line)
+        if not m:
+            continue
+        bssid = m.group(1).upper()
+        if bssid in seen:
+            continue
+        seen.add(bssid)
+        rows.append({"bssid": bssid, "channel": m.group(2),
+                     "info": re.sub(r"\s+", " ", m.group(3).strip())})
+    return rows
+
+
+def _wps_nav(control):
+    """Dashboard nav card for the WPS PIN-attack tool (/wps)."""
+    word, bssid = _wps_state()
+    if word == "scanning":
+        summ = "scanning…"
+    elif word == "attacking":
+        summ = "attacking " + (bssid or "an AP") + "…"
+    else:
+        summ = "idle"
+    return (
+        '<a class="navcard" href="' + _esc(_url("/wps", control)) + '">'
+        '<div class="scol"><span class="skey">WPS attacks</span>'
+        '<span class="sval">' + _esc(summ) + "</span>"
+        '<span class="smeta">Scan for WPS APs &amp; run reaver / Pixie-Dust'
+        "</span></div>"
+        '<span class="arrow" aria-hidden="true">&rarr;</span></a>'
+    )
+
+
+def _portal_nav(control):
+    """Dashboard nav card for the evil-portal captive-portal tool (/portal)."""
+    summ = "running" if _service_active(EVIL_PORTAL_SERVICE) else "stopped"
+    return (
+        '<a class="navcard" href="' + _esc(_url("/portal", control)) + '">'
+        '<div class="scol"><span class="skey">Evil-portal</span>'
+        '<span class="sval">' + summ + "</span>"
+        '<span class="smeta">Captive-portal rogue AP (authorized use)</span></div>'
+        '<span class="arrow" aria-hidden="true">&rarr;</span></a>'
+    )
+
+
 # The two device-power actions, with the words each page needs. Shut down is the
 # destructive one (the device will not come back on its own), so it is red.
 _POWER_WORDS = {
@@ -2385,7 +2641,20 @@ def _render_loot(daemon, control=None, message=None, error=False):
             lbl = runnable[0]["label"] if runnable else "see suggestions"
             if any(a["kind"] == "keygen" for a in sug["attacks"]):
                 lbl += " + vendor keygen"
-            sug_cell = '<span class="smeta">' + _esc(lbl) + "</span>"
+            # With web controls on and a runnable attack, make the cell a one-tap
+            # "Run" button that queues exactly that attack for this AP (posts to
+            # /loot with the BSSID). Otherwise just name the best attack.
+            if (control and control.get("ready") and runnable
+                    and r.get("bssid")):
+                sug_cell = (
+                    '<form class="inline" method="post" action="'
+                    + _esc(_url("/loot", control)) + '">' + _csrf_field(control)
+                    + '<input type="hidden" name="suggest" value="'
+                    + _esc(r.get("bssid")) + '">'
+                    + '<button type="submit" title="Queue: ' + _esc(lbl)
+                    + '">Run: ' + _esc(runnable[0]["label"]) + "</button></form>")
+            else:
+                sug_cell = '<span class="smeta">' + _esc(lbl) + "</span>"
         trows.append(
             '<tr><td data-label="status">' + badge + "</td>"
             '<td data-label="network">' + name + "</td>"
@@ -2536,6 +2805,214 @@ def _loot_crack_form(daemon, control):
         + _csrf_field(control) + file_box
         + '<div class="formrow">' + wl_select + rule_html + mask_html
         + '<button type="submit">Crack selected</button></div></form>')
+
+
+def _render_wps(control=None, message=None, error=False):
+    """The WPS page (/wps), reached from the dashboard's "WPS attacks" nav card:
+    scan for WPS-enabled APs, then one-tap a reaver / Pixie-Dust attack at any of
+    them. A WPS attack transmits, so (like capture) it needs web auth and the
+    authorized-use ack; recovered keys land on the Loot page. With web auth off
+    the page is read-only -- it shows the last scan but offers no buttons."""
+    word, target = _wps_state()
+    busy = word in ("scanning", "attacking")
+    rows = _wps_scan_rows()
+    ready = bool(control and control.get("ready"))
+
+    banner = ""
+    if message:
+        banner = ('<p class="msg' + (" err" if error else "") + '">'
+                  + _esc(message) + "</p>")
+
+    if word == "scanning":
+        state_html = ('<p class="count">Scanning for WPS access points… this '
+                      "page refreshes on its own.</p>")
+    elif word == "attacking":
+        loot = '<a href="' + _esc(_url("/loot", control)) + '">Loot</a>'
+        state_html = ('<p class="count">Attacking ' + _esc(target or "an AP")
+                      + "… reaver can take many minutes; the key lands on " + loot
+                      + " if it succeeds. This page refreshes on its own.</p>")
+    else:
+        state_html = ""
+
+    if ready:
+        scan_form = (
+            '<form class="inline" method="post" action="'
+            + _esc(_url("/wps", control)) + '">' + _csrf_field(control)
+            + '<input type="hidden" name="action" value="scan">'
+            + '<button type="submit"' + (" disabled" if busy else "")
+            + ">Scan for WPS APs</button></form>")
+    else:
+        scan_form = ('<p class="hint">Turn web controls on to scan and attack '
+                     "from here (they use the device login): <code>sudo kestrel "
+                     "web auth system</code>. Over SSH: <code>sudo kestrel wps "
+                     "scan</code> then <code>sudo kestrel wps attack "
+                     "&lt;bssid&gt;</code>.</p>")
+
+    if rows:
+        trows = []
+        for r in rows:
+            if ready:
+                act = (
+                    '<form class="inline" method="post" action="'
+                    + _esc(_url("/wps", control)) + '">' + _csrf_field(control)
+                    + '<input type="hidden" name="action" value="attack">'
+                    + '<input type="hidden" name="bssid" value="'
+                    + _esc(r["bssid"]) + '">'
+                    + '<button type="submit"' + (" disabled" if busy else "")
+                    + ">Attack</button></form>")
+            else:
+                act = '<span class="smeta">—</span>'
+            trows.append(
+                '<tr><td data-label="bssid">' + _esc(r["bssid"]) + "</td>"
+                '<td data-label="ch">' + _esc(r["channel"]) + "</td>"
+                '<td data-label="details">' + _esc(r["info"]) + "</td>"
+                '<td data-label="attack">' + act + "</td></tr>")
+        table = ("<div class='wrap'><table><thead><tr><th>bssid</th><th>ch</th>"
+                 "<th>details</th><th>attack</th></tr></thead><tbody>"
+                 + "".join(trows) + "</tbody></table></div>")
+    else:
+        table = ('<p class="count">No WPS scan results yet. Run a scan to list '
+                 "the WPS-enabled access points in range.</p>")
+
+    note = ('<p class="smeta">Attacks run reaver with the offline Pixie-Dust '
+            "attack first. Lab / authorized use only; a recovered key appears on "
+            "the Loot page tagged <em>via WPS</em>. More detail: the on-device "
+            "guide (<code>/guide</code>).</p>")
+    tail = _AGENT_STARTING_JS if busy else ""
+    back = '<p><a href="' + _esc(_url("/", control)) + '">&larr; Dashboard</a></p>'
+    return _page(
+        "WPS attacks - Kestrel",
+        back + "<h1>WPS attacks</h1>" + banner + state_html
+        + "<p>" + scan_form + "</p><h2>WPS access points</h2>" + table + note
+        + tail,
+    )
+
+
+def _render_wps_attack_confirm(control, bssid, error=""):
+    """Authorized-use confirm before a WPS attack from the web (mirrors the CLI
+    ack). The box must be ticked; the confirm re-posts the attack with the ack,
+    and the root helper records it once."""
+    note = ('<p class="msg err">' + _esc(error) + "</p>") if error else ""
+    qs = _esc(control.get("qs", ""))
+    body = (
+        "<h1>Attack " + _esc(bssid) + "?</h1>" + note
+        + '<div class="ack"><p>' + _esc(WPS_ACK_TEXT) + "</p>"
+        + '<form method="post" action="/wps' + qs + '">' + _csrf_field(control)
+        + '<input type="hidden" name="action" value="attack">'
+        + '<input type="hidden" name="bssid" value="' + _esc(bssid) + '">'
+        + '<label class="check"><input type="checkbox" name="ack" value="yes"> '
+        + "I am authorized to attack this access point.</label>"
+        + '<button type="submit">Start WPS attack</button></form></div>'
+        + '<p><a href="/wps' + qs + '">Cancel</a></p>'
+    )
+    return _page("Kestrel - WPS attack", body)
+
+
+def _render_portal(daemon, control=None, message=None, error=False):
+    """The evil-portal page (/portal), reached from the dashboard's "Evil-portal"
+    nav card: the rogue-AP captive portal's live service state and settings, a
+    start/stop control, and the captured submissions. Starting transmits, so
+    (like capture) it needs web auth and the authorized-use ack. Submissions are
+    plaintext, so they are shown only with web auth on (read-only page hides
+    them, like the wpa-sec "Show" view)."""
+    cfg = daemon._fresh_config().get("evil-portal") or {}
+    active = _service_active(EVIL_PORTAL_SERVICE)
+    ready = bool(control and control.get("ready"))
+
+    banner = ""
+    if message:
+        banner = ('<p class="msg' + (" err" if error else "") + '">'
+                  + _esc(message) + "</p>")
+
+    dot = "ok" if active else ""
+    state_row = (
+        '<div class="card"><div class="srow"><span class="dot ' + dot + '"></span>'
+        '<div class="scol"><span class="skey">Portal</span>'
+        '<span class="sval">' + ("Running" if active else "Stopped")
+        + ' <span class="smeta">SSID &ldquo;' + _esc(cfg.get("ssid", "Guest WiFi"))
+        + "&rdquo; &middot; ch " + _esc(cfg.get("channel", 1))
+        + " &middot; " + _esc(cfg.get("portal_ip", "10.0.0.1"))
+        + "</span></span></div></div></div>")
+
+    if ready:
+        if active:
+            ctrl = (
+                '<form class="inline" method="post" action="'
+                + _esc(_url("/portal", control)) + '">' + _csrf_field(control)
+                + '<input type="hidden" name="action" value="stop">'
+                + '<button type="submit" class="danger">Stop portal</button></form>')
+        else:
+            ctrl = (
+                '<form class="inline" method="post" action="'
+                + _esc(_url("/portal", control)) + '">' + _csrf_field(control)
+                + '<input type="hidden" name="action" value="start">'
+                + "<button type=\"submit\">Start portal</button></form>")
+        ctrl = "<p>" + ctrl + "</p>"
+    else:
+        ctrl = ('<p class="hint">Turn web controls on to start/stop the portal '
+                "and see submissions here (they use the device login): "
+                "<code>sudo kestrel web auth system</code>. Over SSH: "
+                "<code>sudo kestrel evil-portal start</code> / "
+                "<code>stop</code> / <code>creds</code>.</p>")
+
+    # Captured submissions (plaintext) -- only with web auth on.
+    if ready:
+        creds = evilportal.load_creds(EVIL_PORTAL_CREDS)
+        if creds:
+            crows = []
+            for c in reversed(creds):          # newest first
+                ts = time.strftime("%Y-%m-%d %H:%M:%S",
+                                   time.localtime(c.get("ts", 0)))
+                fields = c.get("fields") or {}
+                kv = ", ".join("%s=%s" % (_esc(k), _esc(v))
+                               for k, v in sorted(fields.items()))
+                crows.append(
+                    '<tr><td data-label="time">' + _esc(ts) + "</td>"
+                    '<td data-label="client">' + _esc(c.get("client") or "")
+                    + "</td>"
+                    '<td data-label="submitted">' + kv + "</td></tr>")
+            creds_html = (
+                "<h2>Captured submissions</h2>"
+                '<p class="smeta">Shown in cleartext; %d submission(s).</p>'
+                % len(creds)
+                + "<div class='wrap'><table><thead><tr><th>time</th>"
+                "<th>client</th><th>submitted</th></tr></thead><tbody>"
+                + "".join(crows) + "</tbody></table></div>")
+        else:
+            creds_html = ("<h2>Captured submissions</h2>"
+                          '<p class="count">No submissions captured yet.</p>')
+    else:
+        creds_html = ""
+
+    note = ('<p class="smeta">The portal serves the neutral shipped page (or '
+            "your own template in <code>/etc/kestrel/evil-portal/templates/</code>) "
+            "and logs what clients submit. It takes over the capture dongle and "
+            "pauses capture while it runs. Lab / authorized use only.</p>")
+    tail = _AGENT_STARTING_JS if active else ""
+    back = '<p><a href="' + _esc(_url("/", control)) + '">&larr; Dashboard</a></p>'
+    return _page(
+        "Evil-portal - Kestrel",
+        back + "<h1>Evil-portal</h1>" + banner + state_row + ctrl + creds_html
+        + note + tail,
+    )
+
+
+def _render_portal_start_confirm(control, error=""):
+    """Authorized-use confirm before starting the evil-portal from the web
+    (mirrors the CLI ack). The confirm re-posts start with the ack."""
+    note = ('<p class="msg err">' + _esc(error) + "</p>") if error else ""
+    qs = _esc(control.get("qs", ""))
+    body = (
+        "<h1>Start the evil-portal?</h1>" + note
+        + '<div class="ack"><p>' + _esc(PORTAL_ACK_TEXT) + "</p>"
+        + '<form method="post" action="/portal' + qs + '">' + _csrf_field(control)
+        + '<input type="hidden" name="action" value="start">'
+        + '<label class="check"><input type="checkbox" name="ack" value="yes"> '
+        + "I am authorized to run a rogue AP here.</label>"
+        + '<button type="submit">Start portal</button></form></div>'
+        + '<p><a href="/portal' + qs + '">Cancel</a></p>'
+    )
+    return _page("Kestrel - start evil-portal", body)
 
 
 def _render_addresses(addresses):
@@ -2772,6 +3249,8 @@ def _render_status(status, control=None, message=None, error=False, addresses=No
         '<span class="smeta">Browse by network or access point</span></div>'
         '<span class="arrow" aria-hidden="true">&rarr;</span></a>'
         + _loot_nav(status.get("crack"), control)
+        + _wps_nav(control)
+        + _portal_nav(control)
         + _whitelist_nav(cap, control)
     )
 

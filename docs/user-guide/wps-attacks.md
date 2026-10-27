@@ -25,6 +25,15 @@ the Pi's built-in Wi-Fi. `kestrel wps` **pauses capture** for the duration and
 restarts it (if it was running) when the attack finishes. One radio, one job at
 a time — you are either capturing or running WPS, never both.
 
+## From the dashboard
+
+With the dashboard login on (`[web] auth`), the **WPS attacks** card on the
+dashboard opens a page with a **Scan for WPS APs** button and, for each result,
+an **Attack** button (first attack asks the acknowledgment). The scan and attack
+run in the background and the page shows the live state and refreshes itself; a
+recovered key lands on the Loot page. The terminal below is the same-strength
+equivalent.
+
 ## Use it
 
 Everything is one command — no service, nothing always-on.

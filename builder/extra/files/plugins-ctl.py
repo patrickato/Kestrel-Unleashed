@@ -572,6 +572,80 @@ def apply_capture(change):
     return {"ok": True, "capture": enabled, "restart": False}
 
 
+_MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+
+
+def apply_evil_portal(change):
+    """Start or stop the evil-portal from the web page:
+
+      {"target": "evil-portal", "action": "start"|"stop", "ack": bool}
+
+    Starting stands up an open rogue AP and logs what clients submit, and it
+    takes over the capture dongle, so it needs the authorized-use acknowledgment.
+    The CLI shells to the start-on-demand service (quick; the portal then runs in
+    the background), the same path as the terminal, so the two never drift."""
+    action = change.get("action")
+    if action not in ("start", "stop"):
+        return {"ok": False, "error": "bad request"}
+    if action == "start":
+        if not os.path.exists(ACK_FILE) and change.get("ack") is not True:
+            return {"ok": False, "need_ack": True,
+                    "error": "evil-portal stands up a rogue AP and captures what "
+                    "clients submit: confirm authorized use to start it"}
+        rc, out = _run_capture_cli(["evil-portal", "start", "--yes"])
+    else:
+        rc, out = _run_capture_cli(["evil-portal", "stop"])
+    if rc != 0:
+        detail = out.splitlines()[-1] if out else _silent_cli_error("evil-portal", rc)
+        return {"ok": False, "error": detail}
+    sys.stderr.write("plugins-ctl apply: evil-portal %s via web\n" % action)
+    return {"ok": True, "evil_portal": action, "restart": False}
+
+
+def run_wps(args):
+    """Launch a WPS scan/attack as a fixed-name transient unit (background --
+    scans and attacks run for seconds-to-minutes, too long to block the web
+    request). The fixed unit name means systemd refuses a second run while one is
+    active, so two never fight over the one radio."""
+    cmd = ["systemd-run", "--quiet", "--collect", "--unit=kestrel-wps-run",
+           PWN_TOOL] + list(args)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False,
+                              timeout=15, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "error": str(exc)}
+    if proc.returncode != 0:
+        lines = ((proc.stderr or "") + (proc.stdout or "")).strip().splitlines()
+        return {"ok": False, "error": lines[-1] if lines
+                else "could not start (a WPS run may already be going)"}
+    sys.stderr.write("plugins-ctl apply: wps %s via web\n" % " ".join(args[1:]))
+    return {"ok": True, "wps": args[1], "restart": False}
+
+
+def apply_wps(change):
+    """Launch a WPS scan or attack in the background from the web page:
+
+      {"target": "wps", "action": "scan"}
+      {"target": "wps", "action": "attack", "bssid": "AA:BB:...", "ack": bool}
+
+    A WPS attack transmits at a specific AP, so it needs the authorized-use ack;
+    the BSSID is strictly validated here before it ever reaches the root CLI (and
+    is passed as its own argv item, never a shell string)."""
+    action = change.get("action")
+    if action == "scan":
+        return run_wps(["wps", "scan"])
+    if action == "attack":
+        bssid = str(change.get("bssid") or "").strip()
+        if not _MAC_RE.match(bssid):
+            return {"ok": False, "error": "not a BSSID"}
+        if not os.path.exists(ACK_FILE) and change.get("ack") is not True:
+            return {"ok": False, "need_ack": True,
+                    "error": "a WPS attack transmits at that AP: confirm "
+                    "authorized use to run it"}
+        return run_wps(["wps", "attack", bssid.upper(), "--yes"])
+    return {"ok": False, "error": "bad request"}
+
+
 def apply_agent(change):
     """Set the learning agent's algorithm/policy and enable/disable it from the
     web page:
@@ -987,6 +1061,10 @@ def apply_change(change):
                 "first (sudo kestrel web auth basic)"}
     if change.get("target") == "capture":
         return apply_capture(change)
+    if change.get("target") == "wps":
+        return apply_wps(change)
+    if change.get("target") == "evil-portal":
+        return apply_evil_portal(change)
     if change.get("target") == "config-set":
         return apply_config_set(change)
     if change.get("target") == "agent":

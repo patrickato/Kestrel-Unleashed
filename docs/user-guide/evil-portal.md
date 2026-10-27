@@ -32,6 +32,16 @@ mode) in access-point mode, not the Pi's built-in Wi-Fi. Starting it **pauses
 capture**; stopping it resumes capture. One radio, one job at a time. It is
 **start-on-demand only** — it never comes up on its own at boot.
 
+## From the dashboard
+
+With the dashboard login on (`[web] auth`), the **Evil-portal** card opens a page
+that shows whether the portal is running and its SSID/channel, has **Start
+portal** / **Stop portal** buttons (Start asks the acknowledgment), and lists the
+captured submissions right on the page. Because those submissions are plaintext,
+the page shows them **only while the dashboard login is on** (like the wpa-sec
+"Show" view); with the login off the page is read-only and the submissions are
+hidden. The terminal below is the same-strength equivalent.
+
 ## Use it
 
 ```bash

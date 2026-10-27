@@ -585,6 +585,10 @@
       # Root-owned: the in-place update engine's run status, lock, in-progress
       # marker and backups (never in the pi-owned update state dir below).
       - /var/lib/kestrel/update-run
+      # Root-owned, world-readable: the `kestrel wps` tool writes its state
+      # (idle|scanning|attacking) and last scan output here for the /wps page;
+      # the daemon (pi) only reads them, and they never hold a secret.
+      - /var/lib/kestrel/wps
 
   # Multi-file installs use one `install` command per group, not a copy loop:
   # every Ansible module run starts Python under QEMU (~1.5 s), and copy costs

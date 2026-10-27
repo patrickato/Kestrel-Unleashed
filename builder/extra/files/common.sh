@@ -77,6 +77,11 @@ PWN_KIOSK_SERVICE=kestrel-kiosk.service
 PWN_EVIL_PORTAL_DIR=${PWN_EVIL_PORTAL_DIR:-$PWN_STATE_DIR/evil-portal}
 PWN_EVIL_PORTAL_SERVICE=kestrel-evil-portal.service
 
+# WPS (Kestrel-Unleashed): the web page drives scan/attack in the background and
+# reads live state from here -- `state` (idle|scanning|attacking <bssid>) and
+# `scan.txt` (the last wash results). Recovered keys go to the crack loot store.
+PWN_WPS_DIR=${PWN_WPS_DIR:-$PWN_STATE_DIR/wps}
+
 # Defaults; /etc/default/kestrel overrides them. These code defaults are
 # the source of truth on an in-place (app-layer) update, which does not touch
 # /etc/default, so a new key MUST be given its default here, not only in

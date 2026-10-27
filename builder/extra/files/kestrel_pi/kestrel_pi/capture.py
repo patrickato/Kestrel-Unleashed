@@ -161,6 +161,23 @@ class CaptureInterface:
                 continue
         return total
 
+    def files_for_bssid(self, bssid):
+        """The ``*.hc22000`` files whose handshakes include ``bssid`` (case-
+        insensitive). Used by the web "run the suggested attack" button to crack
+        just that one AP: the controller reads the targets back out of these
+        files, so the suggested job hits only this network (plus any that share a
+        file in per-ssid mode -- related, same name). Empty when none hold it."""
+        want = (bssid or "").upper()
+        if not want:
+            return []
+        out = []
+        for path in self.hashline_files():
+            for event in self.read_events(path):
+                if (event.bssid or "").upper() == want:
+                    out.append(path)
+                    break
+        return out
+
     def ap_bssids(self):
         """The set of unique AP BSSIDs across the store, i.e. the distinct access
         points we hold a handshake from. Reads every hashline file, so a caller
