@@ -137,29 +137,45 @@ Sources:
 - **SecLists** — <https://github.com/danielmiessler/SecLists> (`Passwords/WiFi-WPA/`, `Passwords/Common-Credentials/`, `Passwords/Leaked-Databases/`).
 - **Probable-Wordlists** (Berzerk0) — <https://github.com/berzerk0/Probable-Wordlists> (the WPA lists are under `Real-Passwords/`; the big cuts are released via the repo's download links/torrents).
 
-### Download the recommended set straight onto the device
+### Download the recommended set
 
-With the device online, drop the recommended lists straight into the wordlists
-folder (owned by `pi`, so no `sudo` needed). It picks them up automatically.
+The two core lists (verified paths): the best small WPA list and rockyou.
+
+**On the Kestrel Pi (or any Linux/WSL bash shell)** — real `wget`, into the
+wordlists folder (owned by `pi`, so no `sudo`); it is picked up automatically:
 
 ```bash
 cd /var/lib/kestrel/wordlists/
-
-# Tier 1–2 — the best small WPA list + two broad top-N lists (small, fast):
 wget https://raw.githubusercontent.com/danielmiessler/SecLists/master/Passwords/WiFi-WPA/probable-v2-wpa-top4800.txt
-wget https://raw.githubusercontent.com/danielmiessler/SecLists/master/Passwords/Common-Credentials/10-million-password-list-top-100000.txt
-wget https://raw.githubusercontent.com/danielmiessler/SecLists/master/Passwords/Common-Credentials/10-million-password-list-top-1000000.txt
-
-# rockyou, WPA-ready (download, extract, keep only 8+ char lines, clean up):
 wget https://github.com/danielmiessler/SecLists/raw/master/Passwords/Leaked-Databases/rockyou.txt.tar.gz
 tar xzf rockyou.txt.tar.gz && rm rockyou.txt.tar.gz
-awk 'length>=8' rockyou.txt > rockyou-wpa.txt && rm rockyou.txt
 ```
 
-If the device has **no internet** (e.g. an isolated lab), download those files on
-your PC and stage them on the SD card's boot partition under a folder named
-`kestrel-wordlists/` — they are moved into the wordlists folder on the next boot
-(see the README "Wordlists" section).
+(hashcat skips sub-8-char lines for WPA automatically, so filtering rockyou to
+8+ is optional. If you want it: `awk 'length>=8' rockyou.txt > rockyou-wpa.txt`.)
+
+**On a Windows PC (PowerShell)** to stage them first — use `curl.exe` (the real
+curl; plain `wget`/`curl` in PowerShell are aliases that don't save a file), and
+remember PowerShell has no `&&`, so run each line separately:
+
+```powershell
+cd $HOME\Downloads
+curl.exe -L -O https://raw.githubusercontent.com/danielmiessler/SecLists/master/Passwords/WiFi-WPA/probable-v2-wpa-top4800.txt
+curl.exe -L -O https://github.com/danielmiessler/SecLists/raw/master/Passwords/Leaked-Databases/rockyou.txt.tar.gz
+tar -xzf rockyou.txt.tar.gz
+```
+
+**More lists (optional):** browse these directories on GitHub and download what
+you want (a browser avoids any path guesswork):
+<https://github.com/danielmiessler/SecLists/tree/master/Passwords/Common-Credentials>
+(the `10-million-password-list-top-100000.txt` / `-top-1000000.txt` live here) and
+<https://github.com/danielmiessler/SecLists/tree/master/Passwords/WiFi-WPA>.
+
+Then get them onto the device: if the Kestrel Pi has internet, `wget` straight
+into `/var/lib/kestrel/wordlists/`; if it's offline (isolated lab), stage the
+files on the SD card's boot partition in a folder named `kestrel-wordlists/` —
+they move into the wordlists folder on the next boot (see the README "Wordlists"
+section).
 
 Rules need no download — hashcat ships `best64.rule`, `rockyou-30000.rule` and
 `dive.rule` at `/usr/share/hashcat/rules/`, and Kestrel resolves them by bare
