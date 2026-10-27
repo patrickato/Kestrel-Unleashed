@@ -261,6 +261,26 @@ probe_url = ""
 # page returns a timeout response instead of the browser hanging on a stuck
 # plugin; the call is left to finish in the background. 0 disables.
 webhook_timeout_seconds = 30
+# Trust requests arriving over loopback (127.0.0.1/::1) without a login, so the
+# on-device touchscreen kiosk can operate the dashboard. Off by default; turned
+# on by `kestrel kiosk enable`. A management-link client (BT-PAN/wlan0) never
+# presents a loopback address, so this never opens the page to the network.
+trust_localhost = false
+
+# --- Kestrel-Unleashed: on-device kiosk (the 10" HDMI touchscreen) ---------
+# Show the dashboard full-screen on an attached HDMI touchscreen at boot, as a
+# live, touch-operable console (cage + chromium). Ships OFF; `kestrel kiosk
+# enable` turns it on (and sets [web] trust_localhost so it can drive controls).
+# Local hardware only -- no network, no ack. See docs/user-guide/kiosk-setup.md.
+[kiosk]
+enabled = false
+# What the kiosk shows. The local dashboard by default; any URL works.
+url = "http://127.0.0.1:8080/"
+# Extra chromium flags, one string per entry (e.g. "--force-dark-mode").
+extra_args = []
+# If the screen is mounted sideways, rotate it the standard Pi way in
+# /boot/firmware/config.txt (e.g. `display_hdmi_rotate=2` for 180 deg), not here.
+# See docs/user-guide/kiosk-setup.md.
 
 # All reference plugins ship DISABLED. `kestrel plugins enable <name>`
 # shows the plugin's capabilities, takes the authorized-use acknowledgment for

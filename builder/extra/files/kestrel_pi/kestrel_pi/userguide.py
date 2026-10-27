@@ -307,6 +307,18 @@ Once a network yields a crackable handshake, capturing leaves it alone (one is e
 
 ---
 
+## The on-device kiosk (HDMI touchscreen)
+
+If you've attached an HDMI touchscreen, the kiosk shows the dashboard full-screen on it at boot — a live, touch-operable console. It ships off; turn it on with:
+
+```bash
+sudo kestrel kiosk enable
+```
+
+That also turns on `[web] trust_localhost` so the local screen can operate the dashboard without a login (only loopback is trusted; a phone on the management link still logs in as normal). `sudo kestrel kiosk disable` turns it back off. If the screen is sideways, rotate it in `/boot/firmware/config.txt` (`display_hdmi_rotate=2` for 180°). Troubleshooting is in `docs/user-guide/kiosk-setup.md`.
+
+---
+
 ## Plugins
 
 A small daemon (`kestrel-daemon`) hosts plugins and serves the dashboard. The daemon ships enabled but does nothing on its own until you enable a plugin, and every bundled plugin ships disabled.
@@ -669,6 +681,14 @@ This is the same mechanism as the first-boot Wi-Fi staging, and it works at any 
 | `kestrel crack run FILE... [--wordlist NAME\|all \| --mask '?d?d?d?d?d?d?d?d'] [--rules NAME]` | Queue a manual crack (wordlist or brute-force mask) of one or more capture files. |
 | `kestrel crack enable` / `disable` | Turn on-device cracking on or off. |
 | `kestrel crack clear --yes` | Clear the loot store (captures and wordlists untouched). |
+
+### Kiosk
+
+| Command | What it does |
+| --- | --- |
+| `kestrel kiosk status` | Show the kiosk state and the dashboard URL. |
+| `kestrel kiosk enable [--url URL]` | Show the dashboard full-screen on the HDMI screen. |
+| `kestrel kiosk disable` | Turn the kiosk off. |
 
 ### Plugins
 

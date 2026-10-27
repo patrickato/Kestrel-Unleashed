@@ -2600,3 +2600,21 @@ def test_loot_post_rejects_unknown_file(monkeypatch, tmp_path):
     client.post("/loot", headers=_basic(),
                 data={"csrf": csrf, "file": "../../etc/passwd", "wordlist": "all"})
     assert crack_store.list_jobs(str(crack_dir)) == []
+
+
+# -- Kestrel-Unleashed: kiosk loopback trust ([web] trust_localhost) ---------
+
+def test_trust_localhost_lets_loopback_operate(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path,
+                        {"auth": "system", "trust_localhost": True})
+    # The test client's default REMOTE_ADDR is loopback, so the on-device kiosk
+    # reaches the dashboard with no credential.
+    assert client.get("/").status_code == 200
+    # A non-loopback (management-link) client still must authenticate.
+    assert client.get("/", environ_base={"REMOTE_ADDR": "10.0.0.9"}
+                      ).status_code == 401
+
+
+def test_without_trust_localhost_loopback_still_needs_auth(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path, {"auth": "system"})
+    assert client.get("/").status_code == 401

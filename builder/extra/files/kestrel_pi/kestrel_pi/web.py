@@ -344,6 +344,14 @@ def _verify_system_login(username, password):
 def _check_auth(web_cfg, request):
     """Fail closed: an empty credential or an unknown mode lets nobody in."""
     mode = (web_cfg.get("auth") or "none").lower()
+    # On-device (kiosk) trust: a request that genuinely arrived over loopback is
+    # physically on the device, so with [web] trust_localhost set it is let in
+    # without a credential -- this is what lets the local 10" touchscreen kiosk
+    # operate the dashboard. Management-link clients (BT-PAN, wlan0) always carry
+    # their own address, never loopback, so this never widens off-device access.
+    if web_cfg.get("trust_localhost") and (request.remote_addr or "") in (
+            "127.0.0.1", "::1", "::ffff:127.0.0.1"):
+        return True
     if mode == "none":
         return True
     if mode == "token":

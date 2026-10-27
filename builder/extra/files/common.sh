@@ -66,6 +66,10 @@ PWN_CRACK_DIR=${PWN_CRACK_DIR:-$PWN_STATE_DIR/crack}
 PWN_WORDLISTS_DIR=${PWN_WORDLISTS_DIR:-$PWN_STATE_DIR/wordlists}
 PWN_CRACK_SERVICE=kestrel-crack.service
 
+# On-device kiosk (Kestrel-Unleashed): the dashboard full-screen on an HDMI
+# touchscreen. Ships off; `kestrel kiosk enable` turns it on.
+PWN_KIOSK_SERVICE=kestrel-kiosk.service
+
 # Defaults; /etc/default/kestrel overrides them. These code defaults are
 # the source of truth on an in-place (app-layer) update, which does not touch
 # /etc/default, so a new key MUST be given its default here, not only in

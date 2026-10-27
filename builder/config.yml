@@ -86,6 +86,15 @@
           - hashcat
           - pocl-opencl-icd
           - ocl-icd-libopencl1
+          # Kestrel-Unleashed: on-device kiosk for an attached HDMI touchscreen.
+          # cage is a minimal single-app Wayland kiosk compositor; it runs
+          # chromium full-screen on the dashboard. seatd hands cage the seat
+          # (input/DRM) without a full login manager. All ship OFF -- the kiosk
+          # service is inert unless [kiosk] enabled. Big (chromium), hence
+          # reflash-class. See docs/user-guide/kiosk-setup.md.
+          - cage
+          - seatd
+          - chromium-browser
           - lnav
           - lsof
           - ncdu
@@ -979,6 +988,34 @@
       name: kestrel-crack.service
       enabled: yes
   ## END kestrel crack ##
+
+  ## START kestrel kiosk (Kestrel-Unleashed) ##
+  # On-device kiosk: the dashboard full-screen on an attached HDMI touchscreen
+  # (cage + chromium). The unit (from the systemd task) and launcher ship, but
+  # the kiosk is OFF -- the unit is NOT enabled here and the launcher exits unless
+  # [kiosk] enabled. `kestrel kiosk enable` turns it on (and sets [web]
+  # trust_localhost). Local hardware only; needs validation on a real screen.
+  - name: install the kestrel kiosk launcher
+    copy:
+      src: "{{ playbook_dir }}/files/kiosk-launch.sh"
+      dest: /usr/local/lib/kestrel/kiosk-launch
+      mode: '0755'
+
+  # cage needs DRM/KMS (video/render) and input access; add pi to those groups.
+  # These groups exist on RPiOS; the seat itself comes from seatd at runtime.
+  - name: add the pi user to the kiosk hardware groups
+    user:
+      name: pi
+      groups: video,render,input
+      append: yes
+
+  # seatd hands cage a seat without a full login manager. Enable it (tiny and
+  # harmless when no kiosk runs); the kiosk unit stays disabled until enabled.
+  - name: enable seatd for the kiosk seat
+    systemd:
+      name: seatd.service
+      enabled: yes
+  ## END kestrel kiosk ##
 
   - name: Delete unnecessary large folder to save space (/root/.cache)
     file:

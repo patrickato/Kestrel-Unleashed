@@ -68,6 +68,9 @@ Usage: $PROG <command>
                      brute-force mask); omit --wordlist for all lists
   crack enable       Enable quick-crack (auto-crack new handshakes); disable to stop
   crack clear --yes  Clear the loot store (captures and wordlists untouched)
+  kiosk              Kiosk status (dashboard full-screen on an HDMI touchscreen)
+  kiosk enable [--url URL]   Show the dashboard full-screen on the HDMI screen
+  kiosk disable      Turn the kiosk off
   plugins            Plugin menu (list, info, enable, disable)
   plugins list       List plugins and whether each is enabled
   plugins info NAME  Show a plugin's capabilities, options, deps and health
@@ -1846,6 +1849,61 @@ cmd_crack() {
     esac
 }
 
+## kiosk (Kestrel-Unleashed on-device HDMI touchscreen dashboard) ###########
+
+cmd_kiosk_status() {
+    echo "Kiosk (HDMI touchscreen):"
+    echo "  config: enabled=$(cfg kiosk.enabled false) url=$(cfg kiosk.url http://127.0.0.1:8080/)"
+    echo "          web trust_localhost=$(cfg web.trust_localhost false)"
+    if systemctl is-active --quiet "$PWN_KIOSK_SERVICE"; then
+        echo "  service: running"
+    else
+        echo "  service: stopped"
+    fi
+    command -v cage >/dev/null 2>&1 || echo "  note: 'cage' not installed"
+    { command -v chromium-browser >/dev/null 2>&1 || command -v chromium >/dev/null 2>&1; } \
+        || echo "  note: no chromium found"
+}
+
+cmd_kiosk_enable() {
+    need_root
+    local url=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --url) url=$2; shift 2 ;;
+            *) die "unknown option for 'kiosk enable': $1" ;;
+        esac
+    done
+    [ -n "$url" ] && config_set kiosk url "\"$url\""
+    config_set kiosk enabled true
+    # The kiosk reaches the dashboard over loopback; trust it so the touchscreen
+    # can operate controls (a management client never presents a loopback addr).
+    config_set web trust_localhost true
+    systemctl enable --now "$PWN_KIOSK_SERVICE"
+    log "kiosk enabled on the HDMI screen (showing $(cfg kiosk.url http://127.0.0.1:8080/))"
+    log "if the screen stays blank, see docs/user-guide/kiosk-setup.md (seat/GPU groups, config.txt)"
+}
+
+cmd_kiosk_disable() {
+    need_root
+    config_set kiosk enabled false
+    # Restore the stricter default: stop trusting loopback once the kiosk is off.
+    config_set web trust_localhost false
+    systemctl disable --now "$PWN_KIOSK_SERVICE" 2>/dev/null || true
+    log "kiosk disabled"
+}
+
+cmd_kiosk() {
+    [ $# -gt 0 ] || { cmd_kiosk_status; return; }
+    local sub=$1; shift
+    case "$sub" in
+        status) cmd_kiosk_status ;;
+        enable) cmd_kiosk_enable "$@" ;;
+        disable) cmd_kiosk_disable ;;
+        *) die "unknown 'kiosk' subcommand: $sub (status|enable|disable)" ;;
+    esac
+}
+
 ## remote-train (offload agent training to a desktop host) #################
 # The `remote-train` plugin trains the learning agent on a more powerful Linux
 # host over SSH, using the pi account's key (reused from backup by default, just
@@ -2357,6 +2415,7 @@ main() {
         network) cmd_network "$@" ;;
         capture) cmd_capture "$@" ;;
         crack) cmd_crack "$@" ;;
+        kiosk) cmd_kiosk "$@" ;;
         plugins) cmd_plugins "$@" ;;
         web) cmd_web "$@" ;;
         backup) cmd_backup "$@" ;;

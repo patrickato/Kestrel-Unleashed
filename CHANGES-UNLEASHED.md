@@ -87,6 +87,17 @@ attack model (wordlists then masks) drives both the auto and manual paths;
 and a mask is normally aimed at one target with `kestrel crack run <file> --mask
 '?d?d?d?d?d?d?d?d'` or the Loot page's mask box.
 
+### Added: on-device kiosk (HDMI touchscreen)
+The dashboard can run full-screen and touch-operable on an attached HDMI screen
+at boot (chromium under the `cage` kiosk compositor). Ships OFF; `kestrel kiosk
+enable` turns it on and sets the new `[web] trust_localhost`, which trusts
+dashboard requests arriving over loopback (the on-device screen) without a login
+— a management-link client never presents a loopback address, so it never widens
+off-device access. Adds `cage`/`seatd`/`chromium-browser` (reflash-class), a
+`[kiosk]` table, `kestrel-kiosk.service` (not enabled by default) and the
+`kestrel kiosk` CLI. Needs validation on a real screen; see
+`docs/user-guide/kiosk-setup.md`.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

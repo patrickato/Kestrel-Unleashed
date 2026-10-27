@@ -45,6 +45,11 @@ WEB_DEFAULTS = {
     "username": "",
     "password": "",
     "token": "",
+    # Trust requests that arrive over loopback (on-device) without a credential,
+    # so the local touchscreen kiosk can operate the dashboard. Off by default;
+    # the kiosk setup turns it on. Never widens off-device access (management
+    # clients never present a loopback address).
+    "trust_localhost": False,
     # Optional explicit HTTP reachability probe; empty = use NetworkManager's
     # own connectivity check for on_internet_available.
     "probe_url": "",

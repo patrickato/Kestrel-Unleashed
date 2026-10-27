@@ -1,0 +1,27 @@
+[Unit]
+Description=kestrel on-device kiosk (HDMI touchscreen dashboard; Kestrel-Unleashed)
+# Needs the seat (seatd) and wants the dashboard up first so it loads cleanly.
+# Ships DISABLED and inert: the launcher also exits 0 unless [kiosk] enabled, so
+# a stray enable never grabs the screen. `kestrel kiosk enable` turns it on.
+After=seatd.service kestrel-daemon.service systemd-user-sessions.service
+Wants=seatd.service kestrel-daemon.service
+
+[Service]
+# Runs as pi: a kiosk browser needs no root. It reaches the dashboard over
+# loopback (with [web] trust_localhost, which `kestrel kiosk enable` sets).
+User=pi
+Group=pi
+# cage needs DRM/KMS + input (video/render/input, added to pi at build) and a
+# seat from seatd (LIBSEAT_BACKEND=seatd). A private Wayland runtime dir.
+SupplementaryGroups=video render input
+RuntimeDirectory=kestrel-kiosk
+RuntimeDirectoryMode=0700
+Environment=XDG_RUNTIME_DIR=/run/kestrel-kiosk
+Environment=LIBSEAT_BACKEND=seatd
+ExecStart=/usr/local/lib/kestrel/kiosk-launch
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

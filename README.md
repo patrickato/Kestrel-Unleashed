@@ -18,7 +18,8 @@ Kestrel is a small, battery-powered companion that sits nearby, listens to the W
 
 - **Modern, reproducible base.** A current 64-bit Raspberry Pi OS (bookworm, Python 3.11), produced by a scripted Packer + Ansible build rather than a hand-maintained card, so the whole image is easy to rebuild, audit and extend.
 - **AngryOxide capture engine.** Capture runs on [AngryOxide](https://git.3ntropy.io/aluminum-ice/AngryOxide) over in-kernel `nl80211`/mac80211 drivers — no out-of-tree drivers or DKMS — on a dedicated USB adapter, so the built-in Wi-Fi and Bluetooth stay free for management.
-- **On-device quick-crack.** A niced, thermal-gated background worker cracks captured handshakes on the Pi itself with `hashcat -m 22000` against your wordlists (drop-in, auto-detected), and shows the recovered password in cleartext on the web Loot page and the CLI. Local-only — it reads data you already captured, never the radio or network. (See [On-device quick-crack](#on-device-quick-crack-kestrel-unleashed).)
+- **On-device quick-crack.** A niced, thermal-gated background worker cracks captured handshakes on the Pi itself with `hashcat -m 22000` against your wordlists (drop-in, auto-detected) — dictionaries, rules and brute-force masks — and shows the recovered password in cleartext on the web Loot page and the CLI. Local-only — it reads data you already captured, never the radio or network. (See [On-device quick-crack](#on-device-quick-crack-kestrel-unleashed).)
+- **On-device kiosk.** Optional full-screen, touch-operable dashboard on an attached HDMI screen at boot (chromium under cage). (See [On-device kiosk](#on-device-kiosk-kestrel-unleashed).)
 - **Reworked plugin host.** A small daemon hosts features as plugins. The `Plugin` base class and `on_*` hooks stay source-compatible with the pwnagotchi plugin API, with non-blocking off-loop dispatch, typed plugin context, capability and permission declarations, dependency ordering, hook-API versioning, and config validation with health reporting added on top.
 - **Mobile-first web dashboard.** A responsive, dark-mode-aware dashboard and control surface — server-rendered and dependency-free — shows live status and per-plugin readouts and drives capture, plugins and power from a phone. (See [Web interface](#web-interface).)
 - **Trainable learning agent.** An optional reinforcement-learning policy (stable-baselines3 / RecurrentPPO) picks the scan posture each decision window, with offline training, on-device fine-tuning, model import and remote training over SSH; it always falls back to a scripted sweep.
@@ -215,6 +216,17 @@ Cracking only does something once a wordlist is present. Two curated lists ship 
 - **Before first boot (no SSH):** make a folder named `kestrel-wordlists` on the **boot partition** (`/boot/firmware` on the device, the small FAT partition your PC sees when you plug in the card) and drop your wordlist files in it. On boot they are moved into `/var/lib/kestrel/wordlists/` automatically and the staged folder is cleared.
 
 Every readable file in the wordlists dir is picked up automatically — no config edit needed. They are tried **smallest-first** by default (`[crack] order = "size"`), so quick lists land the easy passwords in minutes and a big list like rockyou grinds in the background as the last resort. On a Pi, prefer a small **WPA-specific** list first (SecLists `Passwords/WiFi-WPA/…`) and keep rockyou as the overnight pass; cracking WPA2 on a CPU is slow (~1–2k guesses/sec), so smallest-first matters. Hashcat **rule** files are already on the device (`/usr/share/hashcat/rules/`): select one by bare name with `[crack] rules` (e.g. `rules = ["best64.rule"]`) for a deeper retry on a small list. **Which lists and rules to use, ranked for this hardware, is in [`docs/user-guide/wordlist-recommendations.md`](docs/user-guide/wordlist-recommendations.md).**
+
+## On-device kiosk (Kestrel-Unleashed)
+
+Show the dashboard **full-screen on an attached HDMI touchscreen** at boot — a live, touch-operable console (loot, capture, plugins) the moment the device powers up. It runs the dashboard in chromium under [cage](https://github.com/cage-kiosk/cage), a minimal Wayland kiosk compositor. Ships **off**; one command turns it on:
+
+```bash
+sudo kestrel kiosk enable          # dashboard full-screen on the HDMI screen
+sudo kestrel kiosk disable
+```
+
+Enabling it sets `[web] trust_localhost`, so the local screen operates the dashboard without a login — requests over loopback are trusted, while a management-link client (BT-PAN/Wi-Fi) never presents a loopback address, so the page is never opened to the network. Local hardware only (no radio, no network). See [`docs/user-guide/kiosk-setup.md`](docs/user-guide/kiosk-setup.md) for rotation and troubleshooting.
 
 ## Plugins
 
