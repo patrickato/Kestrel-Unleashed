@@ -19,8 +19,8 @@ Kestrel is a small, battery-powered companion that sits nearby, listens to the W
 - **Modern, reproducible base.** A current 64-bit Raspberry Pi OS (bookworm, Python 3.11), produced by a scripted Packer + Ansible build rather than a hand-maintained card, so the whole image is easy to rebuild, audit and extend.
 - **AngryOxide capture engine.** Capture runs on [AngryOxide](https://git.3ntropy.io/aluminum-ice/AngryOxide) over in-kernel `nl80211`/mac80211 drivers — no out-of-tree drivers or DKMS — on a dedicated USB adapter, so the built-in Wi-Fi and Bluetooth stay free for management.
 - **On-device quick-crack.** A niced, thermal-gated background worker cracks captured handshakes on the Pi itself with **aircrack-ng** (native CPU, no GPU/OpenCL) against your wordlists (drop-in, auto-detected) — dictionaries, plus brute-force masks via `crunch` — and shows the recovered password in cleartext on the web Loot page and the CLI. Local-only — it reads data you already captured, never the radio or network. (See [On-device quick-crack](#on-device-quick-crack-kestrel-unleashed).)
-- **WPS attacks.** `kestrel wps` runs reaver's offline Pixie-Dust (and online PIN) attack against a WPS-enabled AP; a recovered key lands in the same Loot store as cracked handshakes. CLI-driven, gated by the authorized-use acknowledgment, uses the capture dongle and pauses capture while it runs. (See [WPS attacks](#wps-attacks-kestrel-unleashed).)
-- **Evil-portal.** A generic captive-portal rogue AP for authorized assessments: an open SSID on the capture dongle, catch-all DNS, and an operator-supplied (or neutral shipped) portal page that logs what clients submit — not a kit of fake-brand pages. CLI-driven, gated by the authorized-use acknowledgment, pauses capture while it runs. (See [Evil-portal](#evil-portal-kestrel-unleashed).)
+- **WPS attacks.** `kestrel wps` runs reaver's offline Pixie-Dust (and online PIN) attack against a WPS-enabled AP; a recovered key lands in the same Loot store as cracked handshakes. Driven from the dashboard (scan, then one-tap attack) or the CLI, gated by the authorized-use acknowledgment, uses the capture dongle and pauses capture while it runs. (See [WPS attacks](#wps-attacks-kestrel-unleashed).)
+- **Evil-portal.** A generic captive-portal rogue AP for authorized assessments: an open SSID on the capture dongle, catch-all DNS, and an operator-supplied (or neutral shipped) portal page that logs what clients submit — not a kit of fake-brand pages. Driven from the dashboard (start/stop, submissions shown with auth on) or the CLI, gated by the authorized-use acknowledgment, pauses capture while it runs. (See [Evil-portal](#evil-portal-kestrel-unleashed).)
 - **On-device kiosk.** Optional full-screen, touch-operable dashboard on an attached HDMI screen at boot (chromium under cage). (See [On-device kiosk](#on-device-kiosk-kestrel-unleashed).)
 - **Reworked plugin host.** A small daemon hosts features as plugins. The `Plugin` base class and `on_*` hooks stay source-compatible with the pwnagotchi plugin API, with non-blocking off-loop dispatch, typed plugin context, capability and permission declarations, dependency ordering, hook-API versioning, and config validation with health reporting added on top.
 - **Mobile-first web dashboard.** A responsive, dark-mode-aware dashboard and control surface — server-rendered and dependency-free — shows live status and per-plugin readouts and drives capture, plugins and power from a phone. (See [Web interface](#web-interface).)
@@ -166,18 +166,17 @@ The file is read on the next boot where it is present, not only the first, and i
 
 `kestrel setup` (also `pwn-config`) is the guided entry point; `kestrel network status` shows both links.
 
-## WiFi capture (opt-in)
+## WiFi capture
 
-Packet capture with [AngryOxide](https://git.3ntropy.io/aluminum-ice/AngryOxide) is **off by default** and runs only on the external USB dongle, so management (Bluetooth PAN / Wi-Fi) is never disturbed. It transmits deauthentication frames: use it only on networks you own or are explicitly authorized to test. See [`docs/developer/capture-interface.md`](docs/developer/capture-interface.md) for the interface the agent and plugins build on.
+Packet capture with [AngryOxide](https://git.3ntropy.io/aluminum-ice/AngryOxide) runs only on the external USB dongle, so management (Bluetooth PAN / Wi-Fi) is never disturbed. It transmits deauthentication frames: use it only on networks you own or are explicitly authorized to test. See [`docs/developer/capture-interface.md`](docs/developer/capture-interface.md) for the interface the agent and plugins build on.
 
-Enable it after an authorized-use acknowledgment. The acknowledgment is asked
-once and then remembered; `capture reset-ack` makes it ask again:
+**This fork ships capture enabled**, with the authorized-use acknowledgment pre-satisfied for your own isolated lab — so a freshly flashed device starts capturing on first boot as soon as a compatible dongle is attached (it is simply inert, not broken, with no dongle present). Turn it off or back on with the CLI; `reset-ack` re-arms the acknowledgment prompt for a rebuild or a change of hands:
 
 ```bash
-sudo kestrel capture enable            # auto-detects the dongle, prompts once, starts now
-sudo kestrel capture enable --interface wlan1 --yes   # non-interactive
 kestrel capture status                 # state, adapter, store, ack state
-sudo kestrel capture disable
+sudo kestrel capture disable           # stop capturing
+sudo kestrel capture enable            # auto-detect the dongle and start (back on)
+sudo kestrel capture enable --interface wlan1 --yes   # pin a specific adapter
 sudo kestrel capture reset-ack         # forget the acknowledgment (re-ask next enable)
 ```
 
@@ -203,7 +202,7 @@ kestrel crack run NetA.hc22000 NetB.hc22000                 # multiple files; --
 kestrel crack run HomeWiFi.hc22000 --mask '?d?d?d?d?d?d?d?d'   # brute-force every 8-digit router key
 ```
 
-Beyond wordlists, a brute-force **mask** attack (`hashcat -a 3`) catches a random all-numeric router default that no wordlist holds. A mask runs for hours on the Pi, so it's off in auto-crack by default (`[crack] masks`) and best aimed at one target at a time, from the CLI above or the Loot page's mask box.
+Beyond wordlists, a brute-force **mask** attack (aircrack-ng fed by `crunch`) catches a random all-numeric router default that no wordlist holds. A mask runs for hours on the Pi, so it's off in auto-crack by default (`[crack] masks`) and best aimed at one target at a time, from the CLI above or the Loot page's mask box. Masks must be a single repeated class (`?d?d…` for digits, `?H?H…` for uppercase hex); mixed-class masks and rule files are a hashcat feature aircrack-ng does not have, so `[crack] rules` is a no-op on this hardware (see below).
 
 The web **Loot** page (dashboard → *Loot*, with `[web] auth` on) shows the same loot and lets you tick several capture files and queue them against a chosen wordlist or ruleset — the easy way to throw a bigger list at whatever hasn't cracked yet, from a phone or the device's own screen.
 
@@ -217,7 +216,7 @@ Cracking only does something once a wordlist is present. Two curated lists ship 
   ```
 - **Before first boot (no SSH):** make a folder named `kestrel-wordlists` on the **boot partition** (`/boot/firmware` on the device, the small FAT partition your PC sees when you plug in the card) and drop your wordlist files in it. On boot they are moved into `/var/lib/kestrel/wordlists/` automatically and the staged folder is cleared.
 
-Every readable file in the wordlists dir is picked up automatically — no config edit needed. They are tried **smallest-first** by default (`[crack] order = "size"`), so quick lists land the easy passwords in minutes and a big list like rockyou grinds in the background as the last resort. On a Pi, prefer a small **WPA-specific** list first (SecLists `Passwords/WiFi-WPA/…`) and keep rockyou as the overnight pass; cracking WPA2 on a CPU is slow (~1–2k guesses/sec), so smallest-first matters. Hashcat **rule** files are already on the device (`/usr/share/hashcat/rules/`): select one by bare name with `[crack] rules` (e.g. `rules = ["best64.rule"]`) for a deeper retry on a small list. **Which lists and rules to use, ranked for this hardware, is in [`docs/user-guide/wordlist-recommendations.md`](docs/user-guide/wordlist-recommendations.md).**
+Every readable file in the wordlists dir is picked up automatically — no config edit needed. They are tried **smallest-first** by default (`[crack] order = "size"`), so quick lists land the easy passwords in minutes and a big list like rockyou grinds in the background as the last resort. On a Pi, prefer a small **WPA-specific** list first (SecLists `Passwords/WiFi-WPA/…`) and keep rockyou as the overnight pass; cracking WPA2 on a CPU is slow (~1–2k guesses/sec), so smallest-first matters. The cracker runs **aircrack-ng**, which has no rule engine — so put the variations you want directly in your wordlists (a rule-expanded list generated off-box, for instance) rather than relying on `[crack] rules`. **Which lists to use, ranked for this hardware, is in [`docs/user-guide/wordlist-recommendations.md`](docs/user-guide/wordlist-recommendations.md).**
 
 ## WPS attacks (Kestrel-Unleashed)
 
