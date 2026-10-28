@@ -5,9 +5,9 @@ The daemon serves a built-in dashboard (the device's live state - plugin host
 version, internet, capture - plus any plugin readout widgets), a separate
 plugins page (each plugin's state, health and controls) reached by a link from
 the dashboard, and dispatches ``/plugins/<name>/...`` to each plugin's
-``on_webhook``. It binds to the management interfaces (``bnep0``, ``wlan0``) and
-loopback, by interface address rather than a wildcard, so the capture dongle is
-never served. Access control is a config toggle: ``system``
+``on_webhook``. It binds to the management interfaces (``eth0``, ``bnep0``,
+``wlan0``) and loopback, by interface address rather than a wildcard, so the
+capture dongle is never served. Access control is a config toggle: ``system``
 (the default) requires the device login account, so the web login is the same
 credential used to SSH in and the two never drift; ``basic``/``token`` use a
 web-only credential; ``none`` leaves the page open and read-only.

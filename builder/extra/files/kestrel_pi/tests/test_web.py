@@ -591,6 +591,17 @@ def test_resolve_bind_hosts_loopback_and_explicit(monkeypatch):
     assert web.resolve_bind_hosts("10.1.2.3") == ["127.0.0.1", "10.1.2.3"]
 
 
+def test_resolve_bind_hosts_serves_over_ethernet_by_default(monkeypatch):
+    # eth0 is a management interface on this fork, so a headless device on a
+    # plain Ethernet cable (no Wi-Fi staged, no BT paired) still gets the
+    # dashboard bound to its wired address -- "plug it in and it just works".
+    ips = {"eth0": "192.168.12.117", "bnep0": None, "wlan0": None}
+    monkeypatch.setattr(web, "iface_ipv4", lambda iface: ips.get(iface))
+    assert "eth0" in web.MANAGEMENT_INTERFACES
+    hosts = web.resolve_bind_hosts("management")       # uses the default set
+    assert hosts == ["127.0.0.1", "192.168.12.117"]
+
+
 # -- WebServer reconcile (injected factory, no real sockets) -------------
 class _FakeServer:
     def __init__(self, host, port, app):

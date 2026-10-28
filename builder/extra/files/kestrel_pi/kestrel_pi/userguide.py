@@ -69,10 +69,11 @@ For a guided, menu-driven setup instead, run `sudo kestrel setup`. Other first-r
 
 ## Getting online
 
-The device has two built-in ways to reach a network for management and internet. Both use the Pi's built-in radios, never the USB capture dongle, and both can be up at once.
+The device has three ways to reach a network for management and internet, none of which ever use the USB capture dongle, and any of which can be up at once:
 
+- Ethernet (simplest): plug a Pi 5 into your network with a cable and it just works — it gets an address by DHCP, and the dashboard is served over the wired link with nothing to stage. This is the easiest "plug it in and open the dashboard" path. Ethernet is treated as a trusted management link; the controls still need the login, and the page is never served on the capture dongle.
 - Wi-Fi station: the Pi's built-in Wi-Fi joins a network you add. It is bound to the built-in chip's driver, so it can never land on the capture dongle even if interface numbers change.
-- Bluetooth PAN (phone tether): pair your phone once and the device uses the phone's connection. This is the primary path for a device with no Ethernet.
+- Bluetooth PAN (phone tether): pair your phone once and the device uses the phone's connection. This is the primary path for a device in the field with no Ethernet or known Wi-Fi.
 
 The dashboard's Status shows at a glance whether the device is online. For the full Bluetooth-and-Wi-Fi breakdown and IPs, use the terminal:
 

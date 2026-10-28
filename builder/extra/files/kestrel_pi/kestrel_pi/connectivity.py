@@ -1,12 +1,18 @@
 """The connectivity surface the daemon sources ``on_internet_available`` from.
 
-"Online" is true when *either* management path has real upstream reachability:
-the BT PAN (``bnep0``) or the onboard Wi-Fi station (``wlan0``). It is a real
-probe, not just link-up, so a tethered phone with no data or a captive portal
-reads as offline. The monitor fires the edge on the transition from no-path to
-any-path and stays online while at least one path is reachable, so one radio
-dropping while the other is up does not flap the hook. The capture dongle (no
-IP, monitor mode) is never considered.
+"Online" is true when *any* management path has real upstream reachability:
+wired Ethernet (``eth0``), the BT PAN (``bnep0``) or the onboard Wi-Fi station
+(``wlan0``). It is a real probe, not just link-up, so a tethered phone with no
+data or a captive portal reads as offline. The monitor fires the edge on the
+transition from no-path to any-path and stays online while at least one path is
+reachable, so one link dropping while another is up does not flap the hook. The
+capture dongle (no IP, monitor mode) is never considered.
+
+Ethernet is a management path on this fork (the Pi 5 has a wired port), so the
+dashboard is reachable over a plugged-in cable with no Wi-Fi staging and a wired
+device reads as online. The dashboard's controls still require ``[web] auth``;
+an operator who does not want the page served on a wired LAN can set ``[web]
+bind`` to ``loopback`` or to a specific address.
 
 The reachability probe is injectable so the monitor is unit-testable without a
 network; the default probe trusts NetworkManager's own connectivity verdict when
@@ -24,9 +30,12 @@ from __future__ import annotations
 
 import subprocess
 
-# Management interfaces considered, most-preferred first. The capture dongle is
-# deliberately absent.
-MANAGEMENT_INTERFACES = ("bnep0", "wlan0")
+# Management interfaces considered, most-preferred first: wired Ethernet, then
+# the BT PAN tether, then the onboard Wi-Fi station. The capture dongle is
+# deliberately absent (it is in monitor mode with no IP). Ethernet leads because,
+# when a cable is present, it is the most stable management path and the one a
+# headless "plug it in" setup uses.
+MANAGEMENT_INTERFACES = ("eth0", "bnep0", "wlan0")
 
 
 def iface_has_ipv4(iface):

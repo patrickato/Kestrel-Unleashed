@@ -129,7 +129,9 @@ Each entry becomes a NetworkManager profile in `/etc/NetworkManager/system-conne
 
 ## Connecting to a headless device
 
-With no Ethernet, reach the device over Bluetooth PAN (primary) or Wi-Fi. The built-in Wi-Fi/Bluetooth chip handles management; the USB capture dongle is never used for it.
+**Ethernet (simplest).** Plug the Pi 5 into your network with a cable and it just works: it gets an address by DHCP, and the dashboard is served over the wired link with no Wi-Fi staging or Bluetooth pairing needed. Find the device's IP in your router's client list (or via `kestrel.local`) and open `http://<ip>:8080/`, or `ssh pi@<ip>`. Ethernet is treated as a trusted management link; the dashboard's controls still require the login (`[web] auth`), and it is never served on the capture dongle. To *not* serve the page on a wired LAN, set `[web] bind` to `loopback` or a specific address.
+
+**No Ethernet?** Reach the device over Bluetooth PAN (primary) or Wi-Fi. The built-in Wi-Fi/Bluetooth chip handles management; the USB capture dongle is never used for it.
 
 **Bluetooth PAN (phone tethering).** On first boot the device opens a 10-minute pairing window (adjustable in `/etc/default/kestrel`) and advertises as `kestrel-XXXX`. Turn on your phone's Bluetooth tethering, then pair; pairing uses Just Works (no PIN), and the window closes on the first pairing. The device then connects to the phone's network, gets an address by DHCP (falling back to the standard iPhone/Android tethering addresses), reconnects on every boot, and is reachable at `ssh pi@<address>`. To onboard a different phone later: `sudo kestrel network bt-pair`.
 

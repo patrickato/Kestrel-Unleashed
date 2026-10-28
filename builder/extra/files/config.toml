@@ -240,7 +240,8 @@ connectivity_poll_seconds = 15  # how often the management paths are probed
 
 [web]
 enabled = true              # status page + plugin controls + plugin routes
-bind = "management"         # management = bnep0/wlan0/loopback only; never the dongle
+bind = "management"         # management = eth0/bnep0/wlan0/loopback; never the dongle.
+                            # Set "loopback" or a specific IP to not serve on a LAN.
 port = 8080
 # How often the dashboard reloads itself to show fresh device state, in seconds.
 # 0 disables the auto-refresh. Only the read-only dashboard refreshes; settings
