@@ -887,6 +887,22 @@ def test_wps_scan_posts_the_change(monkeypatch, tmp_path):
                        data={"csrf": token, "action": "scan"})
     assert resp.status_code == 200
     assert sent == [{"target": "wps", "action": "scan"}]
+    body = resp.get_data(as_text=True)
+    # just-launched view: shows a scanning line with the duration and self-refreshes
+    assert "Scanning for WPS access points" in body
+    assert "about 20 seconds" in body
+    assert "location.reload" in body            # the self-refresh script is present
+
+
+def test_wps_scan_file_with_no_aps_reads_as_found_none(monkeypatch, tmp_path):
+    scan = tmp_path / "scan.txt"
+    scan.write_text("BSSID  Ch  dBm  WPS  Lck  Vendor  ESSID\n")  # header, no APs
+    monkeypatch.setattr(web, "WPS_SCAN_FILE", str(scan))
+    client, _ = _client(monkeypatch, tmp_path, BASIC)
+    body = client.get("/wps", headers=_basic()).get_data(as_text=True)
+    # a completed scan that found nothing reads clearly, not "no scan yet"
+    assert "No WPS-enabled access points found in the last scan." in body
+    assert "location.reload" not in body        # idle -> no self-refresh loop
 
 
 def test_wps_attack_rejects_a_bad_bssid_without_applying(monkeypatch, tmp_path):
@@ -1012,6 +1028,30 @@ def test_loot_run_suggested_queues_the_right_job(monkeypatch, tmp_path):
     assert job["mask"] == "?d?d?d?d?d?d?d?d"
     assert job["files"] == ["/x/somenet.hc22000"]
     assert job["label"] == "suggest:somenet"
+
+
+def test_loot_no_handshake_row_shows_the_fix_not_a_run_button(monkeypatch, tmp_path):
+    from kestrel_pi.crack import store as crack_store
+
+    crackdir = tmp_path / "crack"
+    crackdir.mkdir()
+    monkeypatch.setattr(web, "CRACK_DIR", str(crackdir))
+    store = crack_store.LootStore(str(crackdir))
+    aps = {}
+    crack_store.LootStore.upsert(
+        aps, {"bssid": "AA:BB:CC:DD:EE:FF", "essid": "ArloCam", "hashlines": 1},
+        now=1)
+    aps["AA:BB:CC:DD:EE:FF"]["no_handshake"] = True
+    aps["AA:BB:CC:DD:EE:FF"]["status"] = "no-handshake"
+    store.save(aps)
+
+    client, _ = _client(monkeypatch, tmp_path, BASIC,
+                        bssid_files={"AA:BB:CC:DD:EE:FF": ["/x/a.hc22000"]})
+    body = client.get("/loot", headers=_basic()).get_data(as_text=True)
+    assert "no handshake" in body                      # the neutral badge
+    assert "needs a 4-way handshake" in body           # points at the fix
+    # a no-handshake AP offers no one-tap Run button (an attack would just error)
+    assert 'name="suggest" value="AA:BB:CC:DD:EE:FF"' not in body
 
 
 def test_loot_run_suggested_rejects_unknown_ap(monkeypatch, tmp_path):

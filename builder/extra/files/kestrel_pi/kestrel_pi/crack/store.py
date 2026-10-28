@@ -134,12 +134,16 @@ class LootStore:
 
     @staticmethod
     def derive_status(rec, all_sigs):
-        """``cracked`` / ``pending`` / ``exhausted`` for ``rec`` given the set of
-        currently available wordlist signatures. Recomputed and cached onto the
-        record by the worker each pass, so the CLI/web can show it without the
-        wordlist set in hand."""
+        """``cracked`` / ``no-handshake`` / ``pending`` / ``exhausted`` for ``rec``
+        given the set of currently available wordlist signatures. Recomputed and
+        cached onto the record by the worker each pass, so the CLI/web can show it
+        without the wordlist set in hand. ``no-handshake`` means the capture holds
+        no crackable 4-way handshake for this AP yet (a PMKID-only capture); it
+        takes precedence over pending/exhausted but not over a recovered key."""
         if rec.get("password"):
             return "cracked"
+        if rec.get("no_handshake"):
+            return "no-handshake"
         tried = set(rec.get("tried") or [])
         if all_sigs and all_sigs.issubset(tried):
             return "exhausted"
@@ -153,11 +157,15 @@ class LootStore:
 
     @staticmethod
     def counts(aps):
-        """``{cracked, pending, exhausted, total}`` from the cached statuses."""
-        out = {"cracked": 0, "pending": 0, "exhausted": 0, "total": len(aps)}
+        """``{cracked, pending, exhausted, no_handshake, total}`` from the cached
+        statuses (the hyphenated ``no-handshake`` status maps to the
+        ``no_handshake`` key so callers can read it as an identifier)."""
+        out = {"cracked": 0, "pending": 0, "exhausted": 0, "no_handshake": 0,
+               "total": len(aps)}
         for rec in aps.values():
-            out[rec.get("status", "pending")] = out.get(
-                rec.get("status", "pending"), 0) + 1
+            st = rec.get("status", "pending")
+            key = "no_handshake" if st == "no-handshake" else st
+            out[key] = out.get(key, 0) + 1
         return out
 
 

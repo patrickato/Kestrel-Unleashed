@@ -761,7 +761,7 @@ def create_app(daemon):
 
     @app.get("/wps")
     def wps_page():  # noqa: ANN202
-        return html(_render_wps(control(),
+        return html(_render_wps(daemon, control(),
                                 message=request.args.get("err")
                                 or request.args.get("msg"),
                                 error=bool(request.args.get("err"))))
@@ -770,25 +770,26 @@ def create_app(daemon):
     def wps_submit():  # noqa: ANN202
         ctl = control()
         if not ctl["ready"]:
-            return html(_render_wps(ctl, message=CONTROLS_OFF, error=True), 403)
+            return html(_render_wps(daemon, ctl, message=CONTROLS_OFF,
+                                    error=True), 403)
         if not _same(request.form.get("csrf") or "", csrf_token):
             return html(_render_wps(
-                ctl, error=True,
+                daemon, ctl, error=True,
                 message="This page is out of date (the daemon restarted); "
                         "try again."), 400)
         action = request.form.get("action")
         if action == "scan":
             reply = apply_change({"target": "wps", "action": "scan"})
             if reply.get("ok"):
-                return html(_render_wps(control(),
-                            message="Scanning for WPS access points; results "
-                                    "appear in a few seconds."))
-            return html(_render_wps(ctl, error=True,
+                # just_launched forces the scanning view + self-refresh now, even
+                # though the background scan unit hasn't written its state yet.
+                return html(_render_wps(daemon, control(), just_launched=True))
+            return html(_render_wps(daemon, ctl, error=True,
                         message=reply.get("error") or "not applied"), 400)
         if action == "attack":
             bssid = (request.form.get("bssid") or "").strip().upper()
             if not _WPS_MAC_RE.match(bssid):
-                return html(_render_wps(ctl, error=True,
+                return html(_render_wps(daemon, ctl, error=True,
                             message="Not a valid BSSID."), 400)
             change = {"target": "wps", "action": "attack", "bssid": bssid}
             if request.form.get("ack") == "yes":
@@ -796,16 +797,16 @@ def create_app(daemon):
             reply = apply_change(change)
             if reply.get("ok"):
                 return html(_render_wps(
-                    control(),
+                    daemon, control(),
                     message="Attacking %s; reaver can take many minutes. The "
                             "recovered key (if any) lands on the Loot page."
                             % bssid))
             if reply.get("need_ack"):
                 return html(_render_wps_attack_confirm(
                     ctl, bssid, reply.get("error") or ""))
-            return html(_render_wps(ctl, error=True,
+            return html(_render_wps(daemon, ctl, error=True,
                         message=reply.get("error") or "not applied"), 400)
-        return html(_render_wps(ctl, message="Nothing changed."))
+        return html(_render_wps(daemon, ctl, message="Nothing changed."))
 
     @app.get("/portal")
     def portal_page():  # noqa: ANN202
@@ -1445,6 +1446,9 @@ _STATUS_CSS = (
     ".pill.p-cracked{background:var(--on-bg);border-color:var(--on-bd);}"
     ".pill.p-pending{background:var(--off-bg);}"
     ".pill.p-exhausted{background:var(--err-bg);border-color:var(--err-bd);}"
+    # No-handshake is a neutral "waiting" state, not an error, so it is muted
+    # rather than red.
+    ".pill.p-no-handshake{background:var(--off-bg);color:var(--muted);}"
     ".picklist{max-height:16em;overflow:auto;border:1px solid var(--border);"
     "border-radius:8px;padding:.4em .7em;margin:.4em 0;background:var(--card);}"
     ".pick{display:block;font-weight:400;margin:.2em 0;}"
@@ -2057,6 +2061,16 @@ def _wps_state():
     return (word, bssid)
 
 
+def _wps_state_age():
+    """Seconds since the WPS state file was last written, or None if absent. Used
+    to show a scan countdown and to treat a 'scanning' state as stale (the scan
+    unit died without resetting it) once it is well past the scan window."""
+    try:
+        return max(0.0, time.time() - os.path.getmtime(WPS_STATE_FILE))
+    except OSError:
+        return None
+
+
 def _wps_scan_rows():
     """Parse the last ``kestrel wps scan`` output (wash) into
     ``[{bssid, channel, info}]`` for the /wps table -- best-effort, one row per
@@ -2553,7 +2567,8 @@ def _render_agent(status, control=None, message=None, error=False):
     )
 
 
-_LOOT_BADGE = {"cracked": "CRACKED", "pending": "trying…", "exhausted": "exhausted"}
+_LOOT_BADGE = {"cracked": "CRACKED", "pending": "trying…", "exhausted": "exhausted",
+               "no-handshake": "no handshake"}
 
 
 def _loot_nav(crack, control):
@@ -2634,6 +2649,11 @@ def _render_loot(daemon, control=None, message=None, error=False):
             pw = '<span class="smeta">—</span>'
         if st == "cracked":
             sug_cell = '<span class="smeta">—</span>'
+        elif st == "no-handshake":
+            # No crackable handshake captured for this AP yet, so an attack would
+            # just error -- point at the fix instead of offering a Run button.
+            sug_cell = ('<span class="smeta">needs a 4-way handshake '
+                        "(connect a client to it while capturing)</span>")
         else:
             sug = crack_suggest.suggest(essid=essid, bssid=r.get("bssid") or "",
                                         have_defaults=have_defaults)
@@ -2807,14 +2827,25 @@ def _loot_crack_form(daemon, control):
         + '<button type="submit">Crack selected</button></div></form>')
 
 
-def _render_wps(control=None, message=None, error=False):
+def _render_wps(daemon, control=None, message=None, error=False,
+                just_launched=False):
     """The WPS page (/wps), reached from the dashboard's "WPS attacks" nav card:
     scan for WPS-enabled APs, then one-tap a reaver / Pixie-Dust attack at any of
     them. A WPS attack transmits, so (like capture) it needs web auth and the
     authorized-use ack; recovered keys land on the Loot page. With web auth off
-    the page is read-only -- it shows the last scan but offers no buttons."""
+    the page is read-only -- it shows the last scan but offers no buttons.
+    ``just_launched`` forces the "scanning" view and self-refresh right after a
+    scan is kicked off, before the background unit has written its state."""
     word, target = _wps_state()
-    busy = word in ("scanning", "attacking")
+    age = _wps_state_age()
+    scan_seconds = int((daemon._fresh_config().get("wps") or {}).get(
+        "scan_seconds", 20) or 20)
+    # A scan unit that died without resetting the state would otherwise leave the
+    # page "scanning" forever; treat a long-stale 'scanning' as finished.
+    if word == "scanning" and age is not None and age > scan_seconds + 45:
+        word = "idle"
+    scanning = just_launched or word == "scanning"
+    busy = scanning or word == "attacking"
     rows = _wps_scan_rows()
     ready = bool(control and control.get("ready"))
 
@@ -2823,14 +2854,20 @@ def _render_wps(control=None, message=None, error=False):
         banner = ('<p class="msg' + (" err" if error else "") + '">'
                   + _esc(message) + "</p>")
 
-    if word == "scanning":
-        state_html = ('<p class="count">Scanning for WPS access points… this '
-                      "page refreshes on its own.</p>")
+    if scanning:
+        if word == "scanning" and age is not None and not just_launched:
+            left = max(0, scan_seconds - int(age))
+            when = ("finishing up…" if left == 0
+                    else "about %d second%s left" % (left, "" if left == 1 else "s"))
+        else:
+            when = "about %d seconds" % scan_seconds
+        state_html = ('<p class="count">Scanning for WPS access points — ' + when
+                      + "… this page updates on its own.</p>")
     elif word == "attacking":
         loot = '<a href="' + _esc(_url("/loot", control)) + '">Loot</a>'
         state_html = ('<p class="count">Attacking ' + _esc(target or "an AP")
                       + "… reaver can take many minutes; the key lands on " + loot
-                      + " if it succeeds. This page refreshes on its own.</p>")
+                      + " if it succeeds. This page updates on its own.</p>")
     else:
         state_html = ""
 
@@ -2870,6 +2907,11 @@ def _render_wps(control=None, message=None, error=False):
         table = ("<div class='wrap'><table><thead><tr><th>bssid</th><th>ch</th>"
                  "<th>details</th><th>attack</th></tr></thead><tbody>"
                  + "".join(trows) + "</tbody></table></div>")
+    elif scanning:
+        table = ""                              # results land when the scan ends
+    elif os.path.exists(WPS_SCAN_FILE):
+        table = ('<p class="count">No WPS-enabled access points found in the last '
+                 "scan.</p>")
     else:
         table = ('<p class="count">No WPS scan results yet. Run a scan to list '
                  "the WPS-enabled access points in range.</p>")
@@ -2878,6 +2920,8 @@ def _render_wps(control=None, message=None, error=False):
             "attack first. Lab / authorized use only; a recovered key appears on "
             "the Loot page tagged <em>via WPS</em>. More detail: the on-device "
             "guide (<code>/guide</code>).</p>")
+    # Self-refresh while a scan/attack is running (or was just launched) so the
+    # page flips to results / idle on its own; it stops once idle (no script).
     tail = _AGENT_STARTING_JS if busy else ""
     back = '<p><a href="' + _esc(_url("/", control)) + '">&larr; Dashboard</a></p>'
     return _page(

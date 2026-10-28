@@ -186,49 +186,58 @@ class CrackWorker:
 
     def _crack_one(self, pcaps, bssid, attack, conf):
         """Crack one AP (``bssid``) in ``pcaps`` with ``attack``. Returns
-        ``(password_or_None, ok)``; ``ok`` is False only when aircrack actually
-        **errored** (bad capture / no handshake), so a run that simply didn't find
-        the key still counts as tried."""
+        ``(password_or_None, ok, reason)``: ``ok`` is False only when the run did
+        not genuinely try the wordlist; ``reason`` is ``"no-handshake"`` when the
+        AP simply has no crackable handshake (benign -- not a worker error),
+        ``"error"`` for a real aircrack failure, else ``None``."""
         timeout = int(conf.get("max_job_seconds") or 0) or None
         kind = attack.get("kind", "dict")
         if kind == "mask":
             crunch_args = ac.mask_to_crunch(attack.get("mask", ""))
             if crunch_args is None:
-                return None, True            # mask crunch can't express: skip
+                return None, True, None      # mask crunch can't express: skip
             rc, out, err = self._run_mask(pcaps, bssid, crunch_args, timeout)
         else:
             wl = attack.get("path", "")
             if not os.path.isfile(wl):
-                return None, True            # missing wordlist: skip, not an error
+                return None, True, None      # missing wordlist: skip, not an error
             rc, out, err = self._runner(ac.build_dict_cmd(pcaps, bssid, wl),
                                         timeout=timeout)
         text = (out or "") + "\n" + (err or "")
         verdict = ac.classify(text)
         if verdict == "cracked":
-            return ac.parse_key(out), True
+            return ac.parse_key(out), True, None
         if verdict == "exhausted":
-            return None, True
+            return None, True, None
+        if verdict == "no-handshake":
+            # Benign: this AP has no crackable 4-way handshake yet (PMKID-only, or
+            # no EAPOL captured). Don't set _last_error -- the worker stays healthy
+            # and the caller marks just this AP "no handshake".
+            return None, False, "no-handshake"
         msg = ("aircrack-ng: " + ac.error_detail(text))[:200]
         log.warning("%s", msg)
         self._last_error = msg
-        return None, False
+        return None, False, "error"
 
     def _run_attack(self, targets, attack, conf, pcaps):
-        """Run ``attack`` against each target AP. Returns ``(cracked, failed)``:
-        ``cracked`` is ``{BSSID: password}`` and ``failed`` is the BSSIDs whose
-        run errored (so the caller does not record the wordlist as tried for
-        them, and a systematic failure never masquerades as 'exhausted')."""
-        cracked, failed = {}, set()
+        """Run ``attack`` against each target AP. Returns
+        ``(cracked, failed, no_handshake)``: ``cracked`` is ``{BSSID: password}``,
+        ``failed`` the BSSIDs whose run genuinely errored, and ``no_handshake``
+        the BSSIDs with no crackable handshake yet (both kept out of 'tried' so
+        they retry once a handshake lands, but only ``failed`` marks the worker)."""
+        cracked, failed, no_handshake = {}, set(), set()
         for target in targets:
             bssid = (target.get("bssid") or "").upper()
             if not bssid:
                 continue
-            password, ok = self._crack_one(pcaps, bssid, attack, conf)
+            password, ok, reason = self._crack_one(pcaps, bssid, attack, conf)
             if password is not None:
                 cracked[bssid] = password
+            elif reason == "no-handshake":
+                no_handshake.add(bssid)
             elif not ok:
                 failed.add(bssid)
-        return cracked, failed
+        return cracked, failed, no_handshake
 
     # -- one pass ---------------------------------------------------------
     def run_once(self):
@@ -267,8 +276,14 @@ class CrackWorker:
                 else:
                     batch = store_mod.next_auto_batch(aps, targets, attacks, recrack)
                     if batch is not None:
-                        state, current = "cracking", self._run_auto(batch, aps, pcaps, conf)
-                        did_work = True
+                        current, progressed = self._run_auto(batch, aps, pcaps, conf)
+                        if progressed:
+                            state, did_work = "cracking", True
+                        else:
+                            # Only no-handshake (or errored) APs this pass -- there
+                            # is nothing to grind, so idle and sleep rather than
+                            # hot-loop; a real error still flips to "error" below.
+                            state, current, did_work = "idle", None, False
 
         LootStore.refresh_statuses(aps, all_sigs)
         self.loot.save(aps)
@@ -286,22 +301,34 @@ class CrackWorker:
         return events
 
     def _run_auto(self, batch, aps, pcaps, conf):
+        """Run one auto batch. Returns ``(current, progressed)``: ``progressed``
+        is True when at least one AP cracked or genuinely tried the wordlist, so
+        the caller can go idle (and sleep) instead of hot-looping on a batch that
+        was all no-handshake/errored APs."""
         attack, tgts = batch
-        cracked, failed = self._run_attack(tgts, attack, conf, pcaps)
+        cracked, failed, no_hs = self._run_attack(tgts, attack, conf, pcaps)
         now = self._clock()
+        progressed = bool(cracked)
         for target in tgts:
             bssid = target["bssid"].upper()
             rec = aps.get(bssid)
             if rec is None:
                 continue
             if bssid in cracked:
+                rec["no_handshake"] = False
                 LootStore.mark_cracked(rec, cracked[bssid], attack["name"], now=now)
-            elif bssid not in failed:
-                # Record the wordlist as tried only when aircrack actually ran it;
-                # on an error the AP stays pending so it retries once fixed.
+            elif bssid in no_hs:
+                rec["no_handshake"] = True     # waiting for a handshake; not tried
+            elif bssid in failed:
+                continue                        # real error: stays pending, retries
+            else:
+                # Record the wordlist as tried only when aircrack actually ran it.
+                rec["no_handshake"] = False
                 LootStore.mark_tried(rec, attack["sig"])
-        return {"essid": tgts[0].get("essid"), "bssid": tgts[0].get("bssid"),
-                "wordlist": attack["name"], "origin": "auto", "started": now}
+                progressed = True
+        current = {"essid": tgts[0].get("essid"), "bssid": tgts[0].get("bssid"),
+                   "wordlist": attack["name"], "origin": "auto", "started": now}
+        return current, progressed
 
     def _run_manual(self, job_entry, aps, pcaps, conf):
         path, job = job_entry
@@ -320,8 +347,8 @@ class CrackWorker:
         targets = targets_from_events(events)
         for target in targets:
             LootStore.upsert(aps, target, now=self._clock())
-        cracked, failed = self._run_attack(targets, attack, conf, pcaps) \
-            if targets else ({}, set())
+        cracked, failed, no_hs = self._run_attack(targets, attack, conf, pcaps) \
+            if targets else ({}, set(), set())
         now = self._clock()
         for target in targets:
             bssid = target["bssid"].upper()
@@ -329,8 +356,12 @@ class CrackWorker:
             if rec is None:
                 continue
             if bssid in cracked:
+                rec["no_handshake"] = False
                 LootStore.mark_cracked(rec, cracked[bssid], attack["name"], now=now)
+            elif bssid in no_hs:
+                rec["no_handshake"] = True
             elif attack["sig"] and bssid not in failed:
+                rec["no_handshake"] = False
                 LootStore.mark_tried(rec, attack["sig"])
         store_mod.remove_job(path)
         return {"essid": job.get("label") or attack["name"], "bssid": "",
@@ -361,6 +392,7 @@ class CrackWorker:
             "cracked": counts["cracked"],
             "pending": counts["pending"],
             "exhausted": counts["exhausted"],
+            "no_handshake": counts["no_handshake"],
             "wordlists": len(wordlists),
             "masks": len(masks or []),
             "queue": store_mod.queue_len(self.crack_dir),

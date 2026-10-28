@@ -91,15 +91,34 @@ def parse_key(text):
     return m.group(1) if m else None
 
 
+# aircrack messages that mean this AP simply has no crackable 4-way handshake in
+# the capture yet -- a PMKID-only capture (aircrack can't use a PMKID; only
+# hashcat could, and the Pi can't run it), or an AP we hold no EAPOL for. This is
+# a normal, per-AP condition, NOT a worker fault: the worker marks the AP "no
+# handshake" and stays healthy instead of flipping the whole page to "error".
+_NO_HANDSHAKE = (
+    "no EAPOL data",
+    "unable to process this AP",
+    "no valid WPA handshakes",
+    "No matching network",
+    "Read 0 packets",
+)
+
+
 def classify(text):
     """How an aircrack run ended, from its output (exit codes don't distinguish
     'not found' from an error): ``"cracked"`` (key recovered), ``"exhausted"``
-    (ran, no match), or ``"error"`` (bad capture / no handshake / didn't run)."""
+    (ran, no match), ``"no-handshake"`` (ran, but this AP has no crackable
+    handshake in the capture), or ``"error"`` (bad capture / didn't run)."""
     t = text or ""
     if "KEY FOUND" in t:
         return "cracked"
     if "KEY NOT FOUND" in t or "Passphrase not in dictionary" in t:
         return "exhausted"
+    low = t.lower()
+    for needle in _NO_HANDSHAKE:
+        if needle.lower() in low:
+            return "no-handshake"
     return "error"
 
 

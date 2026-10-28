@@ -89,6 +89,10 @@ def widget_elements(status, now=None):
                          "kind": "percent"})
     elements.append({"name": "pending", "label": "Still trying",
                      "value": str(int(status.get("pending") or 0)), "kind": "number"})
+    if status.get("no_handshake"):
+        elements.append({"name": "no_handshake", "label": "No handshake yet",
+                         "value": str(int(status.get("no_handshake") or 0)),
+                         "kind": "number"})
     if status.get("exhausted"):
         elements.append({"name": "exhausted", "label": "Exhausted",
                          "value": str(int(status.get("exhausted") or 0)),

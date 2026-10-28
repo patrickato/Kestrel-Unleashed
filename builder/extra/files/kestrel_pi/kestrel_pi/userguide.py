@@ -308,6 +308,8 @@ sudo kestrel crack disable           # turn auto-cracking off (and enable to tur
 
 Once a network yields a crackable handshake, capturing leaves it alone (one is enough — the password is the whole network's), and the cracker keeps that handshake until it cracks or every wordlist is exhausted. Add a new, bigger wordlist later and it automatically gets a fresh pass at everything still uncracked.
 
+**"No handshake" on a row:** the cracker runs **aircrack-ng**, which needs a captured **4-way handshake (EAPOL)** to work. For an access point with no connected client, capture often gets only a **PMKID** — enough to identify the AP, but not something aircrack-ng can crack (hashcat could, but the Pi can't run it). Those rows show **"no handshake"** instead of an error, and the whole cracker stays healthy. To turn one into a crackable target, have a client (a phone, a laptop) **connect or reconnect to that AP while capture is running** — the device forces and records the handshake, and the row becomes a normal pending target on the next pass.
+
 ---
 
 ## WPS attacks

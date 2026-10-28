@@ -274,6 +274,34 @@ directory in `config.yml`, which trips `update_kind=auto` to **reflash** — but
 this release is already reflash-class for the aircrack apt swap above, so it
 rides along at no extra cost (leave `update_kind=auto`, or force `reflash`).
 
+### Fixed: a PMKID-only AP no longer reds-out the whole cracker; WPS scan shows progress
+Two glass-box/UX fixes from the first on-hardware run.
+
+- **Per-AP "no handshake" instead of a worker-wide error.** aircrack-ng cracks
+  only a captured 4-way EAPOL handshake, not a PMKID (hashcat could, but the Pi
+  can't run it). One PMKID-only AP used to set the worker's `error` state and
+  paint the Loot page red even while other APs cracked fine. Now
+  `aircrack.classify` recognises the no-EAPOL/no-handshake family as a distinct
+  **`no-handshake`** verdict; the worker marks just that AP `no-handshake` (a new
+  loot status, muted pill, "needs a 4-way handshake" hint, no Run button), keeps
+  itself healthy, and goes **idle** (and sleeps) when the only remaining work is
+  handshake-less APs instead of hot-looping. A real aircrack failure still flips
+  to `error` and surfaces the reason. The AP is never marked "tried", so it
+  becomes a normal target the moment a handshake is captured. `status.json` gains
+  a `no_handshake` count; the Quick-crack readout shows "No handshake yet: N".
+  Touched: `crack/aircrack.py`, `crack/controller.py`, `crack/store.py`,
+  `crack/readout.py`, `web.py`.
+- **WPS scan progress.** The `/wps` page could sit on "scanning" forever: the
+  self-refresh only fired if the page happened to read the state file mid-scan,
+  and there was a launch race. It now force-refreshes right after a scan is
+  kicked off, shows a countdown ("about N seconds left") from the state file's
+  age and the `[wps] scan_seconds` window, treats a long-stale `scanning` state
+  as finished (so a crashed scan unit can't wedge the page), and distinguishes
+  "no scan yet" from "scanned, found none". Touched: `web.py`.
+
+**Release impact: app-layer-safe** — all `kestrel_pi` package code and `web.py`;
+no build inputs, apt/pip, or new scripts.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

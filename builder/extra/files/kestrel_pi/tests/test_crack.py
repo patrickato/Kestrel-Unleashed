@@ -10,10 +10,26 @@ import os
 import pytest
 
 from kestrel_pi.crack import CRACK_DEFAULTS, HARD_MAX_TEMP_C
+from kestrel_pi.crack import aircrack as ac
 from kestrel_pi.crack import controller, hashcat, readout
 from kestrel_pi.crack import store as store_mod
 from kestrel_pi.crack import wordlists as wl_mod
 from kestrel_pi.crack.store import LootStore
+
+
+def test_aircrack_classify_verdicts():
+    assert ac.classify("KEY FOUND! [ hunter2 ]") == "cracked"
+    assert ac.classify("KEY NOT FOUND") == "exhausted"
+    assert ac.classify("Passphrase not in dictionary") == "exhausted"
+    # the PMKID-only / no-EAPOL family -> benign no-handshake, not an error
+    assert ac.classify(
+        "Packets contained no EAPOL data; unable to process this AP.") == "no-handshake"
+    assert ac.classify("No valid WPA handshakes found") == "no-handshake"
+    assert ac.classify("No matching network found") == "no-handshake"
+    assert ac.classify("Read 0 packets") == "no-handshake"
+    # a genuinely broken run is still an error
+    assert ac.classify("Unsupported file format") == "error"
+    assert ac.classify("") == "error"
 
 
 def _hashline(bssid_hex, essid, htype="02", mic="a" * 32, sta="665544332211"):
@@ -275,10 +291,11 @@ def test_run_once_cracks_and_marks(tmp_path):
     assert status["cracked"] == 1 and status["targets"] == 2
 
 
-def test_aircrack_error_is_not_exhaustion(tmp_path):
-    # aircrack erroring (e.g. no handshake for that BSSID in the capture) must NOT
-    # mark the wordlist tried -- else a failure masquerades as "exhausted". The
-    # AP stays pending and the worker surfaces the error in its status.
+def test_no_handshake_is_its_own_state_not_an_error(tmp_path):
+    # An AP with no crackable handshake in the capture (PMKID-only, or no EAPOL)
+    # is a benign per-AP condition: it is marked "no-handshake", NOT tried (so it
+    # retries once a handshake lands), and it must NOT flip the whole worker to
+    # "error" -- the worker stays healthy (idle here, since it's the only AP).
     d = str(tmp_path)
     _write(os.path.join(d, "wordlists", "small.txt"), "hunter2!\n")
     _write(os.path.join(d, "capture", "nets.hc22000"),
@@ -289,17 +306,46 @@ def test_aircrack_error_is_not_exhaustion(tmp_path):
         if cmd[0] == "tcpdump":
             open(cmd[cmd.index("-w") + 1], "w").close()
             return 0, "", ""
-        return 1, "No valid WPA handshakes found\n", ""     # aircrack error
+        # the exact aircrack message the hardware printed for a PMKID-only AP
+        return 1, "Packets contained no EAPOL data; unable to process this AP.\n", ""
+
+    worker = _worker(tmp_path, cfg, runner)
+
+    worker.run_once()
+    aps = worker.loot.load()
+    assert aps[AP1C]["status"] == "no-handshake"   # not pending, not exhausted
+    assert not aps[AP1C].get("tried")              # retries once a handshake lands
+    status = readout.read_status(worker.crack_dir)
+    assert status["state"] != "error"              # a healthy worker, not red
+    assert not status["error"]                     # nothing surfaced as an error
+    assert status["no_handshake"] == 1
+
+
+def test_real_aircrack_error_surfaces_and_stays_pending(tmp_path):
+    # A genuine aircrack failure (a bad/unreadable capture, not just a missing
+    # handshake) still flips the worker to "error", surfaces the reason, and must
+    # NOT mark the wordlist tried (so a failure never masquerades as "exhausted").
+    d = str(tmp_path)
+    _write(os.path.join(d, "wordlists", "small.txt"), "hunter2!\n")
+    _write(os.path.join(d, "capture", "nets.hc22000"),
+           _hashline(AP1, "HomeWiFi") + "\n")
+    cfg = _config(d, os.path.join(d, "wordlists"))
+
+    def runner(cmd, timeout=None):
+        if cmd[0] == "tcpdump":
+            open(cmd[cmd.index("-w") + 1], "w").close()
+            return 0, "", ""
+        return 1, "Unsupported file format\n", ""          # a real error
 
     worker = _worker(tmp_path, cfg, runner)
 
     worker.run_once()
     aps = worker.loot.load()
     assert aps[AP1C]["status"] == "pending"        # not falsely exhausted
-    assert not aps[AP1C].get("tried")              # the failed list is not recorded
+    assert not aps[AP1C].get("tried")
     status = readout.read_status(worker.crack_dir)
     assert status["state"] == "error"
-    assert "handshake" in status["error"].lower()
+    assert "Unsupported file format" in status["error"]
 
 
 def test_thermal_gate(tmp_path):
