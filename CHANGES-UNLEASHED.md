@@ -302,6 +302,18 @@ Two glass-box/UX fixes from the first on-hardware run.
 **Release impact: app-layer-safe** — all `kestrel_pi` package code and `web.py`;
 no build inputs, apt/pip, or new scripts.
 
+### Added: the dashboard is served over Ethernet
+The dashboard bound only to the management radios (`bnep0` BT-PAN, `wlan0`
+onboard Wi-Fi), never `eth0`, so a headless Pi 5 on a plain Ethernet cable was
+reachable by SSH but not on `:8080`, and read "Internet: Offline" while wired.
+`eth0` is now a management interface (first in the list, as the most stable path
+when a cable is present), so "plug a Pi 5 into the network and open the
+dashboard" just works with no Wi-Fi staging. Ethernet is treated as a trusted
+management link: controls still require `[web] auth`, the capture dongle is still
+never served, and `[web] bind` can be set to `loopback` or a specific IP to not
+serve on a LAN. Touched: `connectivity.py`, `web.py` (app-layer-safe), plus the
+README/GUIDE "getting online" docs. 
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,
