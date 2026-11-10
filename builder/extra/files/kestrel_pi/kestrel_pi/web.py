@@ -1320,26 +1320,47 @@ def create_app(daemon):
 # dependency-free so the daemon still serves one self-contained page over the
 # management link. Colours are CSS variables so light/dark share one ruleset.
 _STATUS_CSS = (
+    # Theme model: the device ships DARK by default -- the palette on :root is the
+    # dark one, not a prefers-color-scheme override -- so every surface, the HDMI
+    # kiosk included, is dark out of the box regardless of the viewer's OS setting.
+    # Light is a fully-defined opt-in palette under :root[data-theme="light"],
+    # reserved for a future settings toggle (no client script is added to any page
+    # just to theme it -- pages stay scriptless where they can). The palette is
+    # "Kestrel": a deep cool slate base with an amber identity accent (--brand, the
+    # one bold colour, used for the title rule and focus), emerald for go-actions
+    # (--accent) and the usual semantic on/off/err tones -- status is never
+    # signalled by colour alone (every dot/pill carries text too).
     ":root{"
-    "--bg:#f6f7f9;--fg:#1b1b1f;--muted:#5b5b66;--card:#fff;--border:#e4e4ea;"
-    "--accent:#2e7d32;--link:#1565c0;"
-    "--on-bg:#e6f4ea;--on-bd:#2e7d32;--off-bg:#f0f0f2;--off-bd:#9e9e9e;"
-    "--err-bg:#fbeaea;--err-bd:#c62828;--shadow:0 1px 2px rgba(0,0,0,.08);"
-    "--msg-bg:#eef6ee;--msg-bd:#9c9;--msgerr-bg:#fbeeee;--msgerr-bd:#d99;}"
-    "@media(prefers-color-scheme:dark){:root{"
-    "--bg:#15161a;--fg:#e7e7ea;--muted:#9a9aa6;--card:#1f2026;--border:#30313a;"
-    "--accent:#388e3c;--link:#64b5f6;"
-    "--on-bg:#16331e;--off-bg:#272830;--err-bg:#3a1d1d;--shadow:0 1px 2px rgba(0,0,0,.5);"
-    "--msg-bg:#14301a;--msg-bd:#2e7d32;--msgerr-bg:#3a1d1d;--msgerr-bd:#c62828;}}"
+    "--bg:#0f1319;--fg:#e8ecf3;--muted:#97a3b6;--card:#171d28;--border:#28303d;"
+    "--accent:#2f9e63;--accent-ink:#ffffff;--brand:#eaa72d;--link:#6fb4ff;"
+    "--on-bg:#12331f;--on-bd:#2f9e63;--off-bg:#1b2230;--off-bd:#596579;"
+    "--err-bg:#3a1e1d;--err-bd:#e2564c;--shadow:0 1px 3px rgba(0,0,0,.45);"
+    "--msg-bg:#12331f;--msg-bd:#2f9e63;--msgerr-bg:#3a1e1d;--msgerr-bd:#e2564c;}"
+    # Explicit light theme (opt-in via the toggle), kept clean and warm-neutral.
+    ':root[data-theme="light"]{'
+    "--bg:#f5f7fa;--fg:#19202b;--muted:#586274;--card:#ffffff;--border:#e3e8f0;"
+    "--accent:#1f8a53;--accent-ink:#ffffff;--brand:#b9791a;--link:#1565c0;"
+    "--on-bg:#e6f4ea;--on-bd:#1f8a53;--off-bg:#eef1f6;--off-bd:#9aa4b5;"
+    "--err-bg:#fbeaea;--err-bd:#c62828;--shadow:0 1px 2px rgba(20,30,50,.10);"
+    "--msg-bg:#eef6ee;--msg-bd:#9cc99c;--msgerr-bg:#fbeeee;--msgerr-bd:#d99;}"
     "*{box-sizing:border-box;}"
     "html{-webkit-text-size-adjust:100%;}"
     # The stack ends in sans-serif so the page still has a sane font off-system.
     "body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;"
     "margin:0 auto;max-width:60em;padding:1em 1em 3em;line-height:1.5;"
     "color:var(--fg);background:var(--bg);}"
-    "h1{font-size:1.5rem;margin:.1em 0 .1em;}"
+    "h1{font-size:1.5rem;margin:.1em 0 .12em;letter-spacing:-.01em;}"
+    # The one identity mark every page shares: a short amber rule under the title.
+    # Deliberately small (not a full-width broadsheet rule) so it reads as a brand
+    # cue, not decoration.
+    "h1::after{content:'';display:block;width:2.1em;height:3px;margin:.32em 0 .1em;"
+    "background:var(--brand);border-radius:2px;}"
     "h2{font-size:1.15rem;margin:1.4em 0 .5em;}"
     "a{color:var(--link);}"
+    # Visible keyboard focus everywhere (a11y floor), in the brand amber.
+    "a:focus-visible,button:focus-visible,summary:focus-visible,"
+    "input:focus-visible,select:focus-visible{outline:2px solid var(--brand);"
+    "outline-offset:2px;}"
     # header subtitle: what the daemon is, with its version and epoch
     ".tagline{color:var(--muted);margin:.1em 0 1em;font-size:.95rem;}"
     # status card: a labelled row per fact (internet, capture) with a status dot
@@ -1426,7 +1447,9 @@ _STATUS_CSS = (
     ".agent-algo{margin:.2em 0 .2em;}"
     ".missing{color:var(--err-bd);}"
     "button{padding:.55em 1.2em;margin-top:1em;border:1px solid transparent;border-radius:8px;"
-    "background:var(--accent);color:#fff;font-size:1rem;cursor:pointer;}"
+    "background:var(--accent);color:var(--accent-ink);font-size:1rem;cursor:pointer;"
+    "transition:filter .12s ease;}"
+    "button:hover{filter:brightness(1.08);}"
     # Disable is destructive, so its button is red rather than the green accent.
     "button.danger{background:var(--err-bd);}"
     # A secondary action (e.g. "retry without a fresh backup") reads as the

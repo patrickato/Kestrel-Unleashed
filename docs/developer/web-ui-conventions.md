@@ -57,12 +57,23 @@ screen first and let it widen.
 - **No fixed pixel widths** on layout; use `%`, `rem`, `max-width`, and flexbox
   so the page adapts from a phone to a laptop.
 
-## Theming: CSS variables + dark mode
+## Theming: CSS variables, dark by default
 
-- Define colours as CSS custom properties on `:root`, and redefine them under
-  `@media (prefers-color-scheme: dark)` so light and dark share one ruleset.
+- Define colours as CSS custom properties on `:root`. The device **ships dark**:
+  the dark palette *is* the `:root` palette (not a `prefers-color-scheme`
+  override), so every surface — the HDMI kiosk included — is dark out of the box
+  regardless of the viewer's OS setting. Light is a fully-defined **opt-in**
+  palette under `:root[data-theme="light"]`, reserved for a future settings
+  toggle; do not re-introduce a `prefers-color-scheme` auto-switch (it would flip
+  a light-OS kiosk to light, which is not what we ship).
+- Spend colour deliberately: `--brand` (amber) is the one bold identity accent
+  (the short rule under each `h1`, focus outlines); `--accent` (emerald) is for
+  go-actions; `--accent-ink` is the readable text on `--accent`; semantic
+  on/off/err tones are reserved for status.
+- Theme by **CSS only** — never add a client script to a page just to theme it
+  (pages stay scriptless where they can; see the no-JS-by-default rule below).
 - Give `body` an explicit `color` and `background`; never rely on the UA
-  default, which breaks in dark mode.
+  default.
 - **Status is never colour alone** (accessibility). Where colour carries
   meaning — e.g. the plugin name cell shaded green/gray/red for
   loaded/disabled/failed — also give it text: a legend, and a `title` (and/or

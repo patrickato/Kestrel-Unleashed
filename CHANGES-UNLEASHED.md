@@ -396,6 +396,30 @@ apt/pip/boot change, no new lib script). The live data flow is validated headles
 is for the hardware pass. Tests: +49 (`test_geo.py`, `test_map.py`,
 `test_geoexport.py`).
 
+### Changed: dashboard ships dark by default, with a visual refresh
+The web UI (dashboard, plugin pages, loot/map/agent, the kiosk view — every page
+through `_page`) now **ships dark by default** rather than following the viewer's
+OS setting, so the HDMI kiosk and a phone are both dark out of the box. The look
+is refreshed into a cohesive "Kestrel" palette: a deep cool-slate base, an amber
+identity accent (`--brand`) as a short rule under every page title and as the
+keyboard-focus outline, emerald go-actions, and the existing semantic on/off/err
+status tones (status still never colour-alone — every dot/pill carries text).
+
+- `web.py`: the `_STATUS_CSS` token block is now dark-on-`:root` with a
+  fully-defined **opt-in** light palette under `:root[data-theme="light"]`
+  (reserved for a future settings toggle — no `prefers-color-scheme` auto-switch,
+  which would wrongly flip a light-OS kiosk). Added `--brand`/`--accent-ink`, the
+  `h1::after` title rule, a visible `:focus-visible` outline and a button hover.
+  Pure CSS — **no client script is added to theme a page** (pages stay scriptless
+  where they can). Every structural class/selector is unchanged, so no page markup
+  moved.
+- `docs/developer/web-ui-conventions.md`: theming section updated to the
+  dark-by-default model.
+
+Release impact: app-layer-safe (the CLI/package carry `web.py`). Validated by
+headless render (kiosk + phone widths) and the suite. Tests: +1 (dark-by-default
++ light palette defined), one theme test updated. 1007 pass, lint clean.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

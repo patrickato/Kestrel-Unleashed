@@ -104,10 +104,21 @@ def test_status_page_renders_with_css_and_no_plugins():
     assert 'class="card"' in html and 'class="srow"' in html
     assert 'class="navcard"' in html and 'href="/plugins"' in html
     assert "no plugins loaded" not in html
-    # Mobile: viewport, a dark palette, and the responsive @media block present.
+    # Mobile: viewport and the responsive @media block present.
     assert "width=device-width" in html
-    assert "prefers-color-scheme:dark" in html
     assert "@media(max-width:40em)" in html
+
+
+def test_ships_dark_by_default_with_light_palette_defined():
+    html = web._render_status(_status([]))
+    # Dark is the baseline palette on :root (not behind a prefers-color-scheme
+    # media query), so the kiosk and every surface is dark out of the box
+    # regardless of the viewer's OS setting; light is a defined opt-in palette.
+    assert "--bg:#0f1319" in html                       # dark tokens on :root
+    assert ':root[data-theme="light"]' in html          # light is opt-in
+    assert "--brand:" in html                           # the amber identity accent
+    # No client script is added just to theme a page.
+    assert "prefers-color-scheme" not in html
 
 
 def test_dashboard_labels_the_plugin_host_not_daemon():
