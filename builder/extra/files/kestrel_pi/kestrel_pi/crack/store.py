@@ -191,30 +191,32 @@ def build_attacks(wordlists, masks=()):
 
 def next_auto_batch(aps, targets, attacks, recrack_on_new=True):
     """The next unit of automatic work: the first attack (in ``attacks`` order)
-    that has at least one uncracked target which has not tried it, paired with
-    every such target.
+    that has an uncracked target which has not tried it, paired with **one** such
+    target. Returns ``(attack, [target])`` or ``None`` when nothing is left.
 
-    Attack-first, not target-first, on purpose: one hashcat run loads the attack
-    once and tests every outstanding target against it, so the quick wins across
-    all APs land before the next (bigger) attack is even opened. Returns
-    ``(attack, [target, ...])`` or ``None`` when there is nothing left to try.
-    ``attacks`` come from :func:`build_attacks` (wordlists then masks); a target
-    with no loot record (no BSSID) is skipped."""
+    One AP per pass, attack-first. The attack-first order still lands the quick
+    wins across every AP before a bigger list is opened (the smallest untried
+    attack is always chosen first, for whichever AP still needs it). Doing a
+    single AP per pass -- rather than the whole batch in one go -- means the
+    worker returns to its loop often, so a handshake caught mid-crack joins
+    within one AP-crack instead of waiting out a long batch, and a freshly
+    cracked password can be reused against the rest right away. There is no cost:
+    aircrack-ng cracks one BSSID per run regardless (the old "load the attack
+    once, test every target" batching was a hashcat optimisation that does
+    nothing here). ``attacks`` come from :func:`build_attacks`; a target with no
+    BSSID is skipped."""
     by_bssid = {}
     for target in targets:
         bssid = (target.get("bssid") or "").upper()
         if bssid:
             by_bssid.setdefault(bssid, target)
     for attack in attacks:
-        batch = []
         for bssid, target in by_bssid.items():
             rec = aps.get(bssid)
             if rec is None or rec.get("password"):
                 continue
             if not _tried_has(rec, attack, recrack_on_new):
-                batch.append(target)
-        if batch:
-            return attack, batch
+                return attack, [target]
     return None
 
 

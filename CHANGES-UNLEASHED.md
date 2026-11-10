@@ -314,6 +314,32 @@ never served, and `[web] bind` can be set to `loopback` or a specific IP to not
 serve on a LAN. Touched: `connectivity.py`, `web.py` (app-layer-safe), plus the
 README/GUIDE "getting online" docs. 
 
+### Improved: crack responsiveness (one AP per pass) + password reuse
+Two changes to the auto-crack worker so it keeps up with live capture and gets
+more out of every crack.
+
+- **One AP per pass.** The worker used to run a wordlist against *every*
+  uncracked AP in a single pass before looping back and re-scanning, so a
+  handshake caught mid-grind waited out the whole batch (hours, on a big list).
+  That "batch all targets" design was a hashcat optimisation (load the dictionary
+  once, test many); under aircrack-ng, which cracks **one BSSID per run**, it
+  bought nothing. `next_auto_batch` now returns one AP per pass, so a new
+  handshake joins within one AP-crack and a freshly recovered password can be
+  reused immediately — smallest-first ordering unchanged. The pcap conversion is
+  now rate-limited (`PCAP_REFRESH_SECONDS`) so the more frequent passes don't
+  re-run tcpdump on a growing capture every few seconds.
+- **Password reuse across APs.** The moment one AP is cracked, its password is
+  tried against every other still-uncracked AP *first*, ahead of the wordlists —
+  PSK reuse across APs (one operator, one area, one vendor default) is common and
+  nearly free to check. Recovered passwords are kept in the crack dir's
+  `recovered-psks.txt` and injected as the highest-priority list; a new recovery
+  re-arms the rest for a fresh pass against the updated set. Config:
+  `[crack] reuse_passwords` (default `true`).
+
+Touched: `crack/store.py`, `crack/controller.py`, `crack/__init__.py`,
+`config.toml`. Release impact: app-layer-safe. Tests: +3 (one-per-pass ordering,
+reuse hit, reuse disabled). 967 pass, lint clean.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

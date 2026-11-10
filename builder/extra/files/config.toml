@@ -159,6 +159,11 @@ max_job_seconds = 0         # per (handshake x wordlist) time budget in seconds;
 # cracked or every wordlist is exhausted, then stops -- but a newly added wordlist
 # re-arms the exhausted ones so a bigger list automatically gets a fresh pass.
 recrack_on_new_wordlist = true
+# Password reuse: the moment one AP is cracked, try that password against every
+# other still-uncracked AP first (people reuse the same PSK across APs, and it is
+# nearly free to check). The recovered passwords are kept in the crack dir's
+# recovered-psks.txt and tried ahead of the wordlists. Set false to disable.
+reuse_passwords = true
 
 [agent]
 # Phase 4: the reinforcement-learning capture agent. It ships OFF; with the

@@ -64,7 +64,8 @@ def _config(tmp_path, wordlists_dir, **over):
              "max_temp_c = %d" % conf["max_temp_c"],
              "resume_temp_c = %d" % conf["resume_temp_c"],
              "max_job_seconds = %d" % conf["max_job_seconds"],
-             "recrack_on_new_wordlist = %s" % ("true" if conf["recrack_on_new_wordlist"] else "false")]
+             "recrack_on_new_wordlist = %s" % ("true" if conf["recrack_on_new_wordlist"] else "false"),
+             "reuse_passwords = %s" % ("true" if conf.get("reuse_passwords", True) else "false")]
     path = os.path.join(tmp_path, "config.toml")
     _write(path, "\n".join(lines) + "\n")
     return path
@@ -223,15 +224,20 @@ def test_derive_status_pending_exhausted_cracked():
     assert LootStore.derive_status(rec, sigs) == "cracked"
 
 
-def test_next_auto_batch_is_wordlist_first():
+def test_next_auto_batch_is_wordlist_first_one_ap_per_pass():
     aps = {AP1C: {"tried": [], "password": ""}, AP2C: {"tried": [], "password": ""}}
     targets = [{"bssid": AP1C}, {"bssid": AP2C}]
     wls = [{"name": "s.txt", "sig": "s:1:1", "path": "/s"},
            {"name": "big.txt", "sig": "b:1:1", "path": "/b"}]
+    # smallest list first, and exactly ONE AP per pass (not the whole batch)
     wl, batch = store_mod.next_auto_batch(aps, targets, wls)
-    assert wl["name"] == "s.txt" and len(batch) == 2       # smallest list, all targets
-    # once both tried the small list and one is cracked, only the other is offered big
-    aps[AP1C]["tried"] = ["s:1:1"]; aps[AP1C]["password"] = "x"
+    assert wl["name"] == "s.txt" and [t["bssid"] for t in batch] == [AP1C]
+    # AP1 done with the small list -> the small list is still offered to AP2 next
+    aps[AP1C]["tried"] = ["s:1:1"]
+    wl, batch = store_mod.next_auto_batch(aps, targets, wls)
+    assert wl["name"] == "s.txt" and [t["bssid"] for t in batch] == [AP2C]
+    # once both tried the small list and AP1 is cracked, only AP2 is offered big
+    aps[AP1C]["password"] = "x"
     aps[AP2C]["tried"] = ["s:1:1"]
     wl, batch = store_mod.next_auto_batch(aps, targets, wls)
     assert wl["name"] == "big.txt" and [t["bssid"] for t in batch] == [AP2C]
@@ -275,14 +281,65 @@ def test_run_once_cracks_and_marks(tmp_path):
     fake = FakeAircrack(cracks={"small.txt": {AP1C: "hunter2!"}})
     worker = _worker(tmp_path, cfg, fake)
 
-    state, did = worker.run_once()
-    assert state == "cracking" and did
+    # One AP per pass now, so drain the worker to completion.
+    for _ in range(10):
+        state, did = worker.run_once()
+        if not did:
+            break
     aps = worker.loot.load()
     assert aps[AP1C]["status"] == "cracked" and aps[AP1C]["password"] == "hunter2!"
     assert aps[AP1C]["cracked_wordlist"] == "small.txt"
-    # AP2 tried the only wordlist and didn't crack => exhausted (nothing more to try)
+    # AP2 tried everything available (the wordlist, plus the recovered-password
+    # reuse list) and didn't crack => exhausted.
     assert aps[AP2C]["status"] == "exhausted"
-    assert aps[AP2C]["tried"] and aps[AP2C]["tried"][0].startswith("small.txt:")
+    assert any(str(t).startswith("small.txt:") for t in (aps[AP2C]["tried"] or []))
+
+
+def test_recovered_password_is_reused_against_other_aps(tmp_path):
+    # AP1 cracks on a wordlist; AP2 uses the SAME password. Reuse must crack AP2
+    # from the recovered-passwords list -- without a wordlist that contains it.
+    d = str(tmp_path)
+    _write(os.path.join(d, "wordlists", "small.txt"), "sharedpass\n")
+    _write(os.path.join(d, "capture", "nets.hc22000"),
+           _hashline(AP1, "HomeWiFi") + "\n" + _hashline(AP2, "Office") + "\n")
+    cfg = _config(d, os.path.join(d, "wordlists"))
+    # small.txt cracks ONLY AP1; AP2 can be cracked only via the reuse list.
+    fake = FakeAircrack(cracks={"small.txt": {AP1C: "sharedpass"},
+                                "recovered-psks.txt": {AP2C: "sharedpass"}})
+    worker = _worker(tmp_path, cfg, fake)
+
+    for _ in range(10):
+        _s, did = worker.run_once()
+        if not did:
+            break
+    aps = worker.loot.load()
+    assert aps[AP1C]["password"] == "sharedpass"
+    assert aps[AP2C]["status"] == "cracked" and aps[AP2C]["password"] == "sharedpass"
+    # AP2 was cracked by the reuse list, not by any user wordlist
+    assert aps[AP2C]["cracked_wordlist"] == "recovered-psks"
+    with open(os.path.join(worker.crack_dir, "recovered-psks.txt")) as fh:
+        assert "sharedpass" in fh.read()
+
+
+def test_reuse_can_be_disabled(tmp_path):
+    # With reuse off, AP2 (same password, not in the wordlist) is never cracked.
+    d = str(tmp_path)
+    _write(os.path.join(d, "wordlists", "small.txt"), "sharedpass\n")
+    _write(os.path.join(d, "capture", "nets.hc22000"),
+           _hashline(AP1, "HomeWiFi") + "\n" + _hashline(AP2, "Office") + "\n")
+    cfg = _config(d, os.path.join(d, "wordlists"), reuse_passwords=False)
+    fake = FakeAircrack(cracks={"small.txt": {AP1C: "sharedpass"},
+                                "recovered-psks.txt": {AP2C: "sharedpass"}})
+    worker = _worker(tmp_path, cfg, fake)
+
+    for _ in range(10):
+        _s, did = worker.run_once()
+        if not did:
+            break
+    aps = worker.loot.load()
+    assert aps[AP1C]["password"] == "sharedpass"
+    assert aps[AP2C]["status"] == "exhausted" and not aps[AP2C].get("password")
+    assert "recovered-psks.txt" not in fake.crack_calls
 
     # second pass: AP1 cracked => left alone; AP2 already tried the only list => idle
     state2, did2 = worker.run_once()

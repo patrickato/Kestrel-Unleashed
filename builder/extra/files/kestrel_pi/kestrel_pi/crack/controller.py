@@ -20,6 +20,7 @@ pi-owned files; nothing here needs root, the radio, or the network.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 import os
 import subprocess
@@ -40,6 +41,10 @@ log = logging.getLogger("kestrel-crack")
 # Idle poll: how long to wait before re-checking for work when there is none to
 # do (new captures arrive on the capture poll cadence, so this needn't be tight).
 IDLE_SLEEP = 15
+# Cap how often the rolling capture is re-converted to a pcap for aircrack: with
+# one AP per crack pass the loop returns often, so without this a growing capture
+# would be re-converted every few seconds. A new handshake still lands within it.
+PCAP_REFRESH_SECONDS = 20
 # How long to wait out a thermal pause before re-reading the temperature.
 THERMAL_SLEEP = 30
 THERMAL_ZONE = "/sys/class/thermal/thermal_zone0/temp"
@@ -148,11 +153,19 @@ class CrackWorker:
         out_dir = os.path.join(self.crack_dir, ".pcap")
         os.makedirs(out_dir, exist_ok=True)
         pcaps = []
+        now = time.time()
         for src in pcapngs:
             dst = os.path.join(out_dir, os.path.basename(src) + ".pcap")
             try:
-                fresh = (os.path.exists(dst)
-                         and os.path.getmtime(dst) >= os.path.getmtime(src))
+                dst_mtime = os.path.getmtime(dst) if os.path.exists(dst) else 0
+                # Re-convert when the capture has grown, but at most once every
+                # PCAP_REFRESH_SECONDS: with one AP per pass the loop comes back
+                # often, and re-running tcpdump on a steadily growing capture
+                # every few seconds would be wasteful. A new handshake is still
+                # picked up within that window.
+                fresh = bool(dst_mtime) and (
+                    dst_mtime >= os.path.getmtime(src)
+                    or (now - dst_mtime) < PCAP_REFRESH_SECONDS)
                 if not fresh:
                     rc, _o, _e = self._runner(ac.convert_cmd(src, dst), timeout=180)
                     if rc != 0:
@@ -251,6 +264,9 @@ class CrackWorker:
                                     conf.get("order", "size"))
         masks = [str(m).strip() for m in (conf.get("masks") or []) if str(m).strip()]
         attacks = store_mod.build_attacks(wordlists, masks)
+        reuse = self._reuse_attack(aps, conf)
+        if reuse is not None:
+            attacks = [reuse] + attacks       # recovered passwords, tried first
         all_sigs = {a["sig"] for a in attacks}
         recrack = bool(conf.get("recrack_on_new_wordlist", True))
 
@@ -299,6 +315,36 @@ class CrackWorker:
         for path in self.capture.hashline_files():
             events.extend(self.capture.read_events(path))
         return events
+
+    def _reuse_attack(self, aps, conf):
+        """A synthetic, highest-priority wordlist of the passwords already
+        recovered, so every still-uncracked AP tries known passwords first -- PSK
+        reuse across APs (one operator, one neighbourhood, one vendor default) is
+        common and nearly free to check. Kept as ``recovered-psks.txt`` in the
+        crack dir; its signature is the content hash, so recovering a new password
+        gives the rest a fresh pass against the updated list. Returns None when
+        disabled (``[crack] reuse_passwords = false``) or nothing is recovered."""
+        if not bool(conf.get("reuse_passwords", True)):
+            return None
+        psks = sorted({rec.get("password") for rec in aps.values()
+                       if rec.get("password")})
+        if not psks:
+            return None
+        body = "".join(p + "\n" for p in psks)
+        path = os.path.join(self.crack_dir, "recovered-psks.txt")
+        try:
+            current = ""
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as fh:
+                    current = fh.read()
+            if current != body:
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(body)
+        except OSError:
+            return None
+        sig = "reuse:" + hashlib.sha1(body.encode("utf-8")).hexdigest()[:12]
+        return {"kind": "dict", "name": "recovered-psks", "path": path,
+                "size": len(psks), "sig": sig}
 
     def _run_auto(self, batch, aps, pcaps, conf):
         """Run one auto batch. Returns ``(current, progressed)``: ``progressed``

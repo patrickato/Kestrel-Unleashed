@@ -78,6 +78,8 @@ CRACK_DEFAULTS = {
     "resume_temp_c": 68,
     "max_job_seconds": 0,
     "recrack_on_new_wordlist": True,
+    "reuse_passwords": True,     # try each recovered password against every other
+                                 # still-uncracked AP first (PSK reuse is common)
 }
 
 __all__ = [
