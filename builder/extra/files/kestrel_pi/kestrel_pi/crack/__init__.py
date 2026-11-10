@@ -50,6 +50,7 @@ DEFAULT_WORDLISTS_DIR = "/var/lib/kestrel/wordlists"
 LOOT_NAME = "loot.json"        # per-AP loot records (keyed by BSSID)
 QUEUE_DIR = "queue"            # manual crack jobs: pi-written, worker-consumed
 STATUS_NAME = "status.json"    # the worker's live status, for the UI (world-readable)
+PROGRESS_NAME = "crack-progress.json"  # live per-crack progress (world-readable)
 POTFILE_NAME = "kestrel.potfile"   # hashcat's shared potfile (accumulates cracks)
 
 # Bumped only on a breaking change to the loot/status JSON shape; the daemon
@@ -84,6 +85,6 @@ CRACK_DEFAULTS = {
 
 __all__ = [
     "CRACK_DIR", "DEFAULT_CAPTURE_STORE", "DEFAULT_WORDLISTS_DIR",
-    "LOOT_NAME", "QUEUE_DIR", "STATUS_NAME", "POTFILE_NAME",
+    "LOOT_NAME", "QUEUE_DIR", "STATUS_NAME", "PROGRESS_NAME", "POTFILE_NAME",
     "CRACK_CONTRACT", "HARD_MAX_TEMP_C", "CRACK_DEFAULTS",
 ]

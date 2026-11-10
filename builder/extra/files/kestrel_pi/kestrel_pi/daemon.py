@@ -631,7 +631,8 @@ class Daemon:
         # like any other (the web page keeps it off the dashboard and shows it on
         # /loot, like the agent card on /agent).
         crack_status = crack_readout.read_status()
-        crack_elements = crack_readout.widget_elements(crack_status)
+        crack_elements = crack_readout.widget_elements(
+            crack_status, crack_readout.read_progress())
         if crack_elements:
             widgets[crack_readout.CARD_NAME] = crack_elements
         return {

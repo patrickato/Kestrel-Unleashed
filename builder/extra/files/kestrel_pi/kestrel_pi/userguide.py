@@ -304,6 +304,7 @@ From the terminal:
 
 ```bash
 kestrel crack status                 # worker state and a cracked/total summary
+kestrel crack watch                  # live, redrawing view of the crack in progress (Ctrl-C to quit)
 kestrel crack list                   # the loot: recovered passwords, in cleartext
 kestrel crack show HomeWiFi          # everything known about one network
 kestrel crack wordlists              # the wordlists on the device, in the order tried
@@ -772,6 +773,7 @@ This is the same mechanism as the first-boot Wi-Fi staging, and it works at any 
 | Command | What it does |
 | --- | --- |
 | `kestrel crack status` | Show the worker state and a cracked/total summary. |
+| `kestrel crack watch` | Live, redrawing view of the crack in progress (wordlist, %, keys/s, passphrase). Ctrl-C to quit. |
 | `kestrel crack list [FILTER]` | List the loot (recovered passwords, in cleartext). |
 | `kestrel crack show <ESSID\|BSSID>` | Full loot for the matching network(s). |
 | `kestrel crack suggest <ESSID\|BSSID>` | Suggest the best attacks for that network's device type (camera, ISP router, Wi-Fi Direct printer, …) with ready `crack run` lines. |

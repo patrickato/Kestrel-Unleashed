@@ -39,11 +39,19 @@ def convert_cmd(pcapng, out_pcap):
     return [TCPDUMP, "-r", str(pcapng), "-w", str(out_pcap)]
 
 
-def build_dict_cmd(pcap, bssid, wordlist):
+def build_dict_cmd(pcap, bssid, wordlist, quiet=True):
     """argv for a dictionary crack of one AP (``bssid``) in ``pcap``. ``pcap``
-    may be one path or a list of paths (aircrack accepts several captures)."""
+    may be one path or a list of paths (aircrack accepts several captures).
+
+    ``quiet`` (``-q``) suppresses aircrack's repainting status block -- fine for
+    the batch worker that reads output at the end, but the **live view** needs
+    that block, so it passes ``quiet=False`` and streams the output through
+    :mod:`.progress`."""
     caps = [str(p) for p in (pcap if isinstance(pcap, (list, tuple)) else [pcap])]
-    return [AIRCRACK, "-w", str(wordlist), "-b", str(bssid), "-q"] + caps
+    cmd = [AIRCRACK, "-w", str(wordlist), "-b", str(bssid)]
+    if quiet:
+        cmd.append("-q")
+    return cmd + caps
 
 
 def build_stdin_cmd(pcap, bssid):

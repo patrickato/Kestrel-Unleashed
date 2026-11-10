@@ -15,6 +15,7 @@ import os
 import time
 
 from . import CRACK_DIR, STATUS_NAME
+from . import progress as progress_mod
 
 # The dashboard card title (its widget-group key / drag-reorder id).
 CARD_NAME = "Quick-crack"
@@ -33,6 +34,13 @@ def read_status(crack_dir=CRACK_DIR):
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def read_progress(crack_dir=CRACK_DIR):
+    """The worker's live ``crack-progress.json`` (or ``None``). Convenience
+    re-export so a caller with the readout already imported need not also reach
+    for :mod:`.progress`."""
+    return progress_mod.read_progress(crack_dir)
 
 
 def _num(value):
@@ -66,9 +74,15 @@ _STATE_LABEL = {
 }
 
 
-def widget_elements(status, now=None):
+def widget_elements(status, progress=None, now=None):
     """The ``[{name,label,value,kind}, ...]`` for the Quick-crack card. Empty for
-    a missing status, so the card simply doesn't show before the worker runs."""
+    a missing status, so the card simply doesn't show before the worker runs.
+
+    When ``progress`` (``crack-progress.json``) is a live 'cracking' record, the
+    card overlays the current wordlist, a progress gauge, the speed and the
+    passphrase being tried, so the auto-refreshing dashboard shows the crack
+    moving. A stale or absent ``progress`` falls back to the per-pass ``current``
+    the worker wrote in ``status``."""
     if not status:
         return []
     elements = [
@@ -109,8 +123,29 @@ def widget_elements(status, now=None):
     if temp is not None:
         elements.append({"name": "temp", "label": "CPU temp",
                          "value": "%.0f°C" % temp, "kind": "text"})
+    live = progress if progress_mod.is_fresh(progress, now) else None
     current = status.get("current") or {}
-    if current:
+    if live:
+        who = (live.get("essid") or live.get("bssid")
+               or current.get("essid") or current.get("bssid") or "?")
+        wl = live.get("wordlist") or current.get("wordlist") or ""
+        elements.append({"name": "current", "label": "Now cracking",
+                         "value": who + (" · " + wl if wl else ""), "kind": "text"})
+        pct = _num(live.get("percent"))
+        if pct is not None:
+            elements.append({"name": "progress", "label": "Progress",
+                             "value": "%.1f%%" % pct, "kind": "gauge"})
+        rate = _num(live.get("rate_kps"))
+        if rate is not None:
+            elements.append({"name": "rate", "label": "Speed",
+                             "value": "%.2f k/s" % rate, "kind": "text"})
+        if live.get("eta"):
+            elements.append({"name": "eta", "label": "Time left",
+                             "value": str(live.get("eta")), "kind": "text"})
+        if live.get("passphrase"):
+            elements.append({"name": "trying", "label": "Trying",
+                             "value": str(live.get("passphrase")), "kind": "text"})
+    elif current:
         who = current.get("essid") or current.get("bssid") or "?"
         wl = current.get("wordlist") or ""
         shown = who + (" · " + wl if wl else "")

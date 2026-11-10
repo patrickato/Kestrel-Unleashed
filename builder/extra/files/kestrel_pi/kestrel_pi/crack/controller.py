@@ -33,6 +33,7 @@ from . import (CRACK_DEFAULTS, CRACK_DIR, DEFAULT_CAPTURE_STORE, HARD_MAX_TEMP_C
                POTFILE_NAME, STATUS_NAME)
 from . import aircrack as ac
 from . import offload as offload_mod
+from . import progress as progress_mod
 from . import store as store_mod
 from . import wordlists as wl_mod
 from .store import LootStore
@@ -114,7 +115,7 @@ class CrackWorker:
 
     def __init__(self, config_path=DEFAULT_CONFIG_PATH, crack_dir=CRACK_DIR,
                  capture_store=DEFAULT_CAPTURE_STORE, runner=_default_runner,
-                 temp_reader=read_temp_c, clock=time.time):
+                 temp_reader=read_temp_c, clock=time.time, stream=False):
         self.config_path = config_path
         self.crack_dir = crack_dir
         self.capture = CaptureInterface(capture_store)
@@ -123,6 +124,10 @@ class CrackWorker:
         self._runner = runner
         self._temp = temp_reader
         self._clock = clock
+        # Stream aircrack's live status into crack-progress.json while a dict
+        # crack grinds (the live view). On-device only (main() sets it); off in
+        # tests, which drive the injected runner and read output in one shot.
+        self._stream = stream
         self._last_error = ""        # last hashcat failure, surfaced in status
         os.makedirs(crack_dir, exist_ok=True)
 
@@ -198,7 +203,61 @@ class CrackWorker:
             except OSError:
                 pass
 
-    def _crack_one(self, pcaps, bssid, attack, conf):
+    def _run_dict_streaming(self, pcaps, bssid, wl, timeout, on_progress):  # pragma: no cover
+        """Run a dictionary crack with a live feed: aircrack-ng *without* ``-q``,
+        its repainting status read as it comes and handed to ``on_progress`` a few
+        times a second. Returns ``(rc, text, "")`` like the injected runner, with
+        ``text`` the head+tail of aircrack's output for the final classify (capped
+        so a multi-hour run can't grow memory without bound). On-device only --
+        the batch path and every test use the injected runner instead."""
+        import select
+        cmd = ac.build_dict_cmd(pcaps, bssid, wl, quiet=False)
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL)
+        except FileNotFoundError:
+            return 127, "", ""
+        head, tail, rc = b"", b"", None
+        deadline = (self._clock() + timeout) if timeout else None
+        last_flush = 0.0
+        flush_every = progress_mod.STALE_SECONDS / 15.0 or 2.0
+        try:
+            while True:
+                if deadline and self._clock() > deadline:
+                    proc.kill()
+                    rc = 124
+                    break
+                ready, _, _ = select.select([proc.stdout], [], [], flush_every)
+                if ready:
+                    chunk = os.read(proc.stdout.fileno(), 4096)
+                    if not chunk:
+                        rc = proc.wait()
+                        break
+                    if len(head) < 8192:
+                        head += chunk[:8192 - len(head)]
+                    tail = (tail + chunk)[-8192:]
+                now = self._clock()
+                if on_progress and (now - last_flush) >= flush_every:
+                    prog = progress_mod.parse_progress(tail.decode("utf-8", "replace"))
+                    if prog:
+                        on_progress(prog)
+                    last_flush = now
+                if proc.poll() is not None and not ready:
+                    rc = proc.returncode
+                    break
+        finally:
+            try:
+                if proc.poll() is None:
+                    proc.kill()
+                if proc.stdout:
+                    proc.stdout.close()
+            except OSError:
+                pass
+        text = (head + b"\n" + tail).decode("utf-8", "replace")
+        return (rc if rc is not None else 0), text, ""
+
+    def _crack_one(self, pcaps, bssid, attack, conf, essid="", origin=""):
         """Crack one AP (``bssid``) in ``pcaps`` with ``attack``. Returns
         ``(password_or_None, ok, reason)``: ``ok`` is False only when the run did
         not genuinely try the wordlist; ``reason`` is ``"no-handshake"`` when the
@@ -215,8 +274,22 @@ class CrackWorker:
             wl = attack.get("path", "")
             if not os.path.isfile(wl):
                 return None, True, None      # missing wordlist: skip, not an error
-            rc, out, err = self._runner(ac.build_dict_cmd(pcaps, bssid, wl),
-                                        timeout=timeout)
+            # Mark this AP/wordlist as the live crack now, so the dashboard and
+            # `kestrel crack watch` show which list is running the instant it
+            # starts (not just after the pass). On-device we also stream the
+            # keys/rate/passphrase into the same file as aircrack repaints.
+            base = {"state": "cracking", "bssid": bssid, "essid": essid,
+                    "wordlist": attack.get("name", ""), "origin": origin,
+                    "started": self._clock()}
+            progress_mod.write_progress(self.crack_dir, base, now=self._clock())
+            if self._stream:
+                rc, out, err = self._run_dict_streaming(
+                    pcaps, bssid, wl, timeout,
+                    lambda prog: progress_mod.write_progress(
+                        self.crack_dir, dict(base, **prog), now=self._clock()))
+            else:
+                rc, out, err = self._runner(ac.build_dict_cmd(pcaps, bssid, wl),
+                                            timeout=timeout)
         text = (out or "") + "\n" + (err or "")
         verdict = ac.classify(text)
         if verdict == "cracked":
@@ -233,7 +306,7 @@ class CrackWorker:
         self._last_error = msg
         return None, False, "error"
 
-    def _run_attack(self, targets, attack, conf, pcaps):
+    def _run_attack(self, targets, attack, conf, pcaps, origin=""):
         """Run ``attack`` against each target AP. Returns
         ``(cracked, failed, no_handshake)``: ``cracked`` is ``{BSSID: password}``,
         ``failed`` the BSSIDs whose run genuinely errored, and ``no_handshake``
@@ -244,7 +317,9 @@ class CrackWorker:
             bssid = (target.get("bssid") or "").upper()
             if not bssid:
                 continue
-            password, ok, reason = self._crack_one(pcaps, bssid, attack, conf)
+            password, ok, reason = self._crack_one(
+                pcaps, bssid, attack, conf,
+                essid=target.get("essid") or "", origin=origin)
             if password is not None:
                 cracked[bssid] = password
             elif reason == "no-handshake":
@@ -314,6 +389,11 @@ class CrackWorker:
         # dashboard shows the real error instead of a silent false "exhausted".
         if self._last_error and state in ("idle", "cracking"):
             state = "error"
+        # Nothing is grinding now, so retire any live-progress record -- otherwise
+        # the dashboard/watch would show a frozen passphrase. (It self-expires via
+        # is_fresh() too, but clearing is immediate and tidy.)
+        if state != "cracking":
+            progress_mod.clear_progress(self.crack_dir)
         self._write_status(aps, conf, wordlists, masks, state, current)
         return state, did_work
 
@@ -359,7 +439,7 @@ class CrackWorker:
         the caller can go idle (and sleep) instead of hot-looping on a batch that
         was all no-handshake/errored APs."""
         attack, tgts = batch
-        cracked, failed, no_hs = self._run_attack(tgts, attack, conf, pcaps)
+        cracked, failed, no_hs = self._run_attack(tgts, attack, conf, pcaps, "auto")
         now = self._clock()
         progressed = bool(cracked)
         for target in tgts:
@@ -400,7 +480,7 @@ class CrackWorker:
         targets = targets_from_events(events)
         for target in targets:
             LootStore.upsert(aps, target, now=self._clock())
-        cracked, failed, no_hs = self._run_attack(targets, attack, conf, pcaps) \
+        cracked, failed, no_hs = self._run_attack(targets, attack, conf, pcaps, "manual") \
             if targets else ({}, set(), set())
         now = self._clock()
         for target in targets:
@@ -491,7 +571,7 @@ def main(argv=None):
     logging.basicConfig(level=logging.INFO, format="%(message)s",
                         stream=sys.stderr)
     worker = CrackWorker(config_path=args.config, crack_dir=args.crack_dir,
-                         capture_store=args.capture_store)
+                         capture_store=args.capture_store, stream=True)
     # Nice ourselves too, so even the worker's own bookkeeping yields to capture.
     try:
         conf = worker.config()

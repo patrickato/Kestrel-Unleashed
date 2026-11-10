@@ -482,6 +482,31 @@ Touched: `plugins/remote-crack.py` (new), `config.toml`, `kestrel.sh`, user guid
 quoting) is unit-tested with the SSH ops stubbed; a real GPU-box run is for the
 hardware pass. Tests: +8 (`test_remote_crack.py`). 1028 pass, lint clean.
 
+### Added: live crack view (`kestrel crack watch` + live dashboard card)
+Cracking a big list against one AP is *hours* on the Pi's CPU with no sign of
+life — aircrack ran with `-q` and its output was read only at the end. The worker
+now marks which wordlist/network it is on the instant a crack starts, and
+on-device streams aircrack's running status (keys tested, %, k/s, ETA, the
+passphrase it is trying) into a world-readable `crack-progress.json`.
+
+- `kestrel crack watch`: a redrawing terminal panel (state, cracked/total, the
+  live wordlist, a progress bar + rate + ETA, the current passphrase), built for
+  an SSH session from a laptop; Ctrl-C quits.
+- The dashboard **Quick-crack** card overlays the same live fields and refreshes
+  on its own (no JS); a stale record self-expires so it never shows a frozen
+  passphrase.
+- aircrack's progress block is parsed by a new pure `kestrel_pi.crack.progress`;
+  the streaming runner drops `-q` only for this path (the batch worker and every
+  test still read output in one shot via the injected runner).
+
+Touched: `kestrel_pi/crack/{progress.py,watchcli.py}` (new), `crack/{__init__,
+aircrack,controller,readout}.py`, `daemon.py`, `kestrel.sh`, user guide. Release
+impact: **app-layer-safe** (package + CLI only; no apt/pip/boot/config/new-lib-
+script/unit). Live numbers need a handshake to crack on-device; the parser,
+overlay, renderer and the worker's write/clear are unit-tested
+(`test_progress.py`), and the aircrack stream itself is for the hardware pass.
+Tests: +13. 1042 pass, lint clean.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

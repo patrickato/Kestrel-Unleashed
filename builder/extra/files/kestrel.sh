@@ -59,6 +59,7 @@ Usage: $PROG <command>
   capture clear --yes [--purge]   Delete the live store (and archives with --purge)
   crack              Quick-crack menu (on-device cracking of captured handshakes)
   crack status       Show the worker state and loot summary
+  crack watch        Live, redrawing view of the crack in progress (Ctrl-C to quit)
   crack list [FILTER]   List loot (recovered passwords in cleartext)
   crack show Q       Full loot for the network(s) matching an ESSID or BSSID
   crack suggest Q    Suggest the best attacks for a network by its device type
@@ -1648,6 +1649,26 @@ PY
     fi
 }
 
+cmd_crack_watch() {
+    # Live, redrawing view of the crack worker. Reads the world-readable status +
+    # progress JSON via the venv package (for the shared renderer), as pi.
+    local interval="2"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --interval) interval="${2:-2}"; shift 2 ;;
+            --once) interval="--once-marker"; shift ;;
+            *) die "usage: $PROG crack watch [--interval SECONDS]" ;;
+        esac
+    done
+    if [ "$interval" = "--once-marker" ]; then
+        run_as_pi "$PWN_VENV_PYTHON" -I -m kestrel_pi.crack.watchcli \
+            --crack-dir "$PWN_CRACK_DIR" --once
+    else
+        run_as_pi "$PWN_VENV_PYTHON" -I -m kestrel_pi.crack.watchcli \
+            --crack-dir "$PWN_CRACK_DIR" --interval "$interval"
+    fi
+}
+
 cmd_crack_list() {
     local loot="$PWN_CRACK_DIR/loot.json" filter="${1:-}"
     [ -f "$loot" ] || { echo "no loot yet (nothing captured or cracked)"; return 0; }
@@ -1981,6 +2002,7 @@ cmd_crack() {
     local sub=$1; shift
     case "$sub" in
         status) cmd_crack_status ;;
+        watch) cmd_crack_watch "$@" ;;
         list|loot) cmd_crack_list "$@" ;;
         show) cmd_crack_show "$@" ;;
         suggest) cmd_crack_suggest "$@" ;;
@@ -1991,7 +2013,7 @@ cmd_crack() {
         enable) cmd_crack_enable ;;
         disable) cmd_crack_disable ;;
         clear) cmd_crack_clear "$@" ;;
-        *) die "unknown 'crack' subcommand: $sub (status|list|show|suggest|wordlists|run|kit|ingest|enable|disable|clear)" ;;
+        *) die "unknown 'crack' subcommand: $sub (status|watch|list|show|suggest|wordlists|run|kit|ingest|enable|disable|clear)" ;;
     esac
 }
 
