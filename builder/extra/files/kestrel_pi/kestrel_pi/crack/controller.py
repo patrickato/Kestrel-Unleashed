@@ -724,6 +724,7 @@ class CrackWorker:
         status = {
             "contract_version": 1,
             "enabled": bool(conf.get("enabled", True)),
+            "engine": self._engine(conf) or "none",
             "state": state,
             "targets": counts["total"],
             "cracked": counts["cracked"],

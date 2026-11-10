@@ -1613,7 +1613,7 @@ cmd_crack_status() {
     local status="$PWN_CRACK_DIR/status.json" wd
     wd=$(cfg crack.wordlists_dir "$PWN_WORDLISTS_DIR")
     echo "Quick-crack:"
-    echo "  config: enabled=$(cfg crack.enabled true) order=$(cfg crack.order size) workload=$(cfg crack.workload 1) nice=$(cfg crack.nice 15)"
+    echo "  config: enabled=$(cfg crack.enabled true) engine=$(cfg crack.engine auto) order=$(cfg crack.order size) nice=$(cfg crack.nice 15)"
     echo "          max_temp_c=$(cfg crack.max_temp_c 75) wordlists_dir=$wd"
     if systemctl is-active --quiet "$PWN_CRACK_SERVICE"; then
         echo "  service: running"
@@ -1630,6 +1630,8 @@ cmd_crack_status() {
 import json, os
 s = json.load(open(os.environ["PWN_STATUS"]))
 print("  state: %s" % s.get("state", "?"))
+if s.get("engine"):
+    print("  engine: %s (active)" % s.get("engine"))
 print("  cracked: %d / %d   still trying: %d   exhausted: %d" % (
     s.get("cracked", 0), s.get("targets", 0), s.get("pending", 0), s.get("exhausted", 0)))
 t = s.get("temp_c")
