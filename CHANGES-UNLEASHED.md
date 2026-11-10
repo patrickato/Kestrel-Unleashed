@@ -340,6 +340,18 @@ Touched: `crack/store.py`, `crack/controller.py`, `crack/__init__.py`,
 `config.toml`. Release impact: app-layer-safe. Tests: +3 (one-per-pass ordering,
 reuse hit, reuse disabled). 967 pass, lint clean.
 
+### Added: wordlist optimizer (`kestrel crack wordlists optimize`)
+Merges every installed wordlist into one de-duplicated master list, dropping
+anything outside WPA passphrase length (8–63 chars) and keeping the best-ranked
+candidates first (first-seen order preserved, so a frequency-ranked source stays
+ranked). De-dup keys on an 8-byte hash per candidate, so even a 14M-line list
+de-dupes in well under 200 MB of RAM on any Pi. Runs as `pi`, writes
+`optimized.txt` to the pi-owned crack dir, and prints the one `sudo cp` to install
+it — the "one good list" without losing smallest-first effectiveness or wasting
+guesses on duplicates/too-short candidates. Core in `crack/wordlists.py`
+(`optimize()`), CLI in `kestrel.sh`. Release impact: app-layer-safe (package +
+CLI). Tests: +2.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

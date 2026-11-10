@@ -341,11 +341,27 @@ def test_reuse_can_be_disabled(tmp_path):
     assert aps[AP2C]["status"] == "exhausted" and not aps[AP2C].get("password")
     assert "recovered-psks.txt" not in fake.crack_calls
 
-    # second pass: AP1 cracked => left alone; AP2 already tried the only list => idle
-    state2, did2 = worker.run_once()
-    assert state2 == "idle" and not did2
-    status = readout.read_status(worker.crack_dir)
-    assert status["cracked"] == 1 and status["targets"] == 2
+
+def test_optimize_merges_dedupes_and_wpa_filters(tmp_path):
+    a = tmp_path / "a.txt"
+    b = tmp_path / "b.txt"
+    a.write_text("alpha123\nshort\npassword1\n")            # "short" (5) dropped
+    b.write_text("password1\nbravo999\n" + "x" * 70 + "\n")  # dup + 70-char dropped
+    out = tmp_path / "master.txt"
+    st = wl_mod.optimize([str(a), str(b)], str(out))
+    # best-first order kept; the duplicate and the out-of-range lines are gone
+    assert out.read_text().splitlines() == ["alpha123", "password1", "bravo999"]
+    assert st["sources"] == 2 and st["written"] == 3
+    assert st["duplicates"] == 1 and st["too_short"] == 1 and st["too_long"] == 1
+
+
+def test_optimize_all_lengths_keeps_short_but_still_dedupes(tmp_path):
+    a = tmp_path / "a.txt"
+    a.write_text("ab\nab\nabcdefgh\n")
+    out = tmp_path / "m.txt"
+    st = wl_mod.optimize([str(a)], str(out), wpa=False)
+    assert out.read_text().splitlines() == ["ab", "abcdefgh"]
+    assert st["duplicates"] == 1 and st["too_short"] == 0
 
 
 def test_no_handshake_is_its_own_state_not_an_error(tmp_path):

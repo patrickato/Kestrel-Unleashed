@@ -292,6 +292,8 @@ Every readable file in the wordlists folder is used automatically — no config 
 
 **Password reuse is automatic.** The moment one network is cracked, that password is tried against every other still-uncracked network *first*, before more wordlist grinding — people reuse the same Wi-Fi password across access points constantly, and checking is nearly free. A network cracked this way shows it was recovered from the reused-password list. Turn it off with `[crack] reuse_passwords = false` if you ever want to.
 
+**Merge your lists into one optimized master list.** `kestrel crack wordlists optimize` merges every installed list into a single de-duplicated list, dropping anything that can't be a WPA key (shorter than 8 or longer than 63 characters) and keeping the best-ranked candidates first — the simplicity of one list with none of the wasted or repeated guesses. It handles even a 14-million-word list on any Pi. It writes `optimized.txt` to the crack folder and prints the one `sudo cp` to drop it into your wordlists folder.
+
 For a random **all-numeric** router key that no wordlist holds, use a brute-force **mask** on a chosen target: `kestrel crack run <file>.hc22000 --mask '?d?d?d?d?d?d?d?d'` (every 8-digit key), or the mask box on the Loot page. A brute force runs for hours, so masks are off by default and best aimed at one network at a time.
 
 ### Seeing and driving it

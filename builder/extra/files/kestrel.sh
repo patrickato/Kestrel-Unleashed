@@ -64,6 +64,7 @@ Usage: $PROG <command>
   crack suggest Q    Suggest the best attacks for a network by its device type
                      (e.g. a camera, an ISP router, a Wi-Fi Direct printer)
   crack wordlists    List the wordlists on the device (in the order tried)
+  crack wordlists optimize   Merge all lists into one deduped, WPA-length master list
   crack run FILE... [--wordlist NAME|all | --mask '?d?d?d?d?d?d?d?d'] [--rules NAME]...
                      Queue a manual crack of one or more capture files (re-run
                      what didn't crack against another wordlist/ruleset, or a
@@ -1722,6 +1723,11 @@ print(S.render_text(S.suggest(essid=essid, bssid=bssid, have_defaults=have),
 }
 
 cmd_crack_wordlists() {
+    if [ "${1:-}" = "optimize" ]; then
+        shift
+        cmd_crack_wordlists_optimize "$@"
+        return
+    fi
     local wd order
     wd=$(cfg crack.wordlists_dir "$PWN_WORDLISTS_DIR")
     order=$(cfg crack.order size)
@@ -1737,6 +1743,39 @@ for w in ls:
 ' "$wd" "$order" 2>/dev/null; then
         find "$wd" -maxdepth 1 -type f ! -name '*.rule' -printf '  %f\n' 2>/dev/null || echo "  (none)"
     fi
+}
+
+cmd_crack_wordlists_optimize() {
+    # Merge every installed wordlist into one de-duplicated, WPA-length-filtered,
+    # best-first master list. Runs as pi and writes to the pi-owned crack dir;
+    # the operator copies it into the (root-owned) wordlists dir to use it -- the
+    # same one-command step used to add any wordlist.
+    local wd out="$PWN_CRACK_DIR/optimized.txt" keepall="0"
+    wd=$(cfg crack.wordlists_dir "$PWN_WORDLISTS_DIR")
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --out) out=$2; shift 2 ;;
+            --all-lengths) keepall="1"; shift ;;   # keep <8 / >63 char lines too
+            *) die "usage: $PROG crack wordlists optimize [--out PATH] [--all-lengths]" ;;
+        esac
+    done
+    run_as_pi "$PWN_VENV_PYTHON" -I -c '
+import sys
+from kestrel_pi.crack import wordlists
+wd, out, keepall = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+srcs = [w["path"] for w in wordlists.discover(wd, "size")]
+if not srcs:
+    print("No wordlists in %s to optimize." % wd); sys.exit(1)
+st = wordlists.optimize(srcs, out, wpa=not keepall)
+print("Merged %d list(s): %d candidates read, %d kept."
+      % (st["sources"], st["read"], st["written"]))
+print("  dropped: %d duplicate, %d too short (<8), %d too long (>63)."
+      % (st["duplicates"], st["too_short"], st["too_long"]))
+print("  wrote %s" % out)
+' "$wd" "$out" "$keepall" || die "optimize failed"
+    echo
+    echo "To make it your primary list, copy it into the wordlists folder:"
+    echo "  sudo cp $out $wd/"
 }
 
 cmd_crack_run() {
