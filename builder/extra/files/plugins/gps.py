@@ -58,6 +58,33 @@ GOOD_CN0 = 35.0         # a healthy open-sky signal; a lock should follow
 # serial reader's 20 s read timeout so a healthy receiver never trips it.
 SIGNAL_STALE_S = 30.0
 
+# The continuous **track** (breadcrumb) for the wardriving map: one
+# {"ts","lat","lon"} JSON line per sample, appended to gps-track.jsonl in the
+# capture store (the same dir the per-handshake sidecars go in, already writable
+# by the daemon). geo.read_track() reads it back as the route polyline. A point
+# is logged when the device has moved at least TRACK_MIN_METERS or
+# TRACK_MIN_SECONDS have passed since the last one, so the line stays dense while
+# moving and just ticks a heartbeat while parked -- never a flood of identical
+# fixes. The file is self-trimming: past TRACK_MAX_BYTES it is rewritten keeping
+# the most recent half, so an all-day drive can't grow it without bound.
+TRACK_NAME = "gps-track.jsonl"
+TRACK_MIN_METERS = 8.0
+TRACK_MIN_SECONDS = 30.0
+TRACK_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _haversine_m(lat1, lon1, lat2, lon2):
+    """Great-circle distance in metres between two WGS-84 points (stdlib math).
+    Used only for the track throttle, so the small-angle error is irrelevant."""
+    import math
+    radius = 6371000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = (math.sin(dp / 2) ** 2
+         + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2)
+    return 2 * radius * math.asin(min(1.0, math.sqrt(a)))
+
 
 class GPS(Plugin):
     __author__ = "kestrel"
@@ -89,6 +116,13 @@ class GPS(Plugin):
         self._gsv = {}          # per-talker GSV accumulator for the C/N0 mean
         self._last_rx = None    # monotonic time of the last sentence/report seen
         self._active = None     # the transport actually in use (auto picks one)
+        # Track (breadcrumb) state: where the capture store lives, and the last
+        # point we logged (lat, lon, monotonic time) for the move/interval
+        # throttle. store_dir is resolved once; None off a device (tests, no
+        # capture view) simply disables track logging.
+        cap = getattr(self.context, "capture", None)
+        self._store_dir = getattr(cap, "store_dir", None)
+        self._track_last = None
         self._fix_lock = threading.Lock()
         self._stop = threading.Event()
         self._reader = threading.Thread(target=self._run, name="gps-reader", daemon=True)
@@ -196,6 +230,8 @@ class GPS(Plugin):
         # Publish the latest fix to the agent seam. A new position is the moment
         # the fix updates; mode/sats/hdop/cn0 carry their most recent values.
         self._publish_latest_fix()
+        # Lay a breadcrumb for the wardriving route (throttled by move/interval).
+        self._append_track(lat, lon)
 
     def _set_mode(self, mode):
         with self._fix_lock:
@@ -256,6 +292,59 @@ class GPS(Plugin):
             log = getattr(self, "log", None)
             if log:
                 log.debug("could not write %s: %s", POSITION_FILE, exc)
+
+    def _append_track(self, lat, lon):
+        """Append one breadcrumb to ``gps-track.jsonl`` in the capture store, the
+        continuous route the map draws. Throttled: a point is kept only once the
+        device has moved ``TRACK_MIN_METERS`` or ``TRACK_MIN_SECONDS`` have
+        passed since the last, so parked time is a slow heartbeat and driving is
+        a dense line. Best-effort like the seam writer -- any error (no store,
+        read-only disk) just means no breadcrumb, never a disturbance to tagging
+        or the UI. Self-trims past ``TRACK_MAX_BYTES`` to the most recent half."""
+        store_dir = getattr(self, "_store_dir", None)
+        if not store_dir:
+            return
+        now = time.monotonic()
+        last = getattr(self, "_track_last", None)
+        if last is not None:
+            moved = _haversine_m(last[0], last[1], lat, lon)
+            if moved < TRACK_MIN_METERS and (now - last[2]) < TRACK_MIN_SECONDS:
+                return
+        path = os.path.join(store_dir, TRACK_NAME)
+        line = json.dumps({"ts": time.time(), "lat": lat, "lon": lon})
+        try:
+            self._trim_track(path)
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+            self._track_last = (lat, lon, now)
+        except OSError as exc:
+            log = getattr(self, "log", None)
+            if log:
+                log.debug("could not append GPS track %s: %s", path, exc)
+
+    @staticmethod
+    def _trim_track(path):
+        """Keep the track file bounded: once it passes ``TRACK_MAX_BYTES``,
+        rewrite it atomically with the most recent half of its lines. Amortised
+        cheap -- it runs only after the file has grown another half-cap."""
+        try:
+            if os.path.getsize(path) <= TRACK_MAX_BYTES:
+                return
+        except OSError:
+            return
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                lines = handle.readlines()
+        except OSError:
+            return
+        keep = lines[len(lines) // 2:]
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as handle:
+                handle.writelines(keep)
+            os.replace(tmp, path)
+        except OSError:
+            pass
 
     # -- handshake tagging ----------------------------------------------
     def on_handshake(self, event):

@@ -353,6 +353,20 @@ port = 2947
 device = "/dev/ttyACM0"
 baud = 9600
 
+[plugins.map]
+enabled = false             # wardriving map: located networks + route + live cursor
+# Draws what the gps plugin records (per-handshake location sidecars + the
+# continuous track) on a self-contained canvas, with a heatmap of where networks
+# are thick, every located AP as a marker (recovered ones lit apart), your route,
+# and a live cursor at the current fix. Reads only; the device transmits nothing.
+tiles = true                # progressive enhancement: let the VIEWING BROWSER pull
+                            # OpenStreetMap street tiles when it is online. The Kestrel
+                            # itself never fetches them. Set false to always use the
+                            # offline graticule view (e.g. a shielded lab with no
+                            # internet, or to leak no coordinates to a tile server).
+refresh_seconds = 5         # how often the open map page polls for new data (2-60)
+max_track_points = 20000    # cap on the most-recent route points the map draws
+
 [plugins.wpa-sec]
 enabled = false             # uploader: on_handshake + on_internet_available, opt-in
 # api_key and endpoint are supplied by the operator at enable time, never baked in.

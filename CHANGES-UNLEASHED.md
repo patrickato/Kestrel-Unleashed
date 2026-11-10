@@ -352,6 +352,44 @@ guesses on duplicates/too-short candidates. Core in `crack/wordlists.py`
 (`optimize()`), CLI in `kestrel.sh`. Release impact: app-layer-safe (package +
 CLI). Tests: +2.
 
+### Added: wardriving map (located networks + route + live cursor)
+A live, self-contained map in the dashboard — the view that makes the device a
+wardriving tool, not just a capture box, and the one upstream does not have. It
+reads what the `gps` plugin already records and draws it with **no map library,
+no build step and no internet required**.
+
+- `kestrel_pi/geo.py` (new, stdlib-only, unit-tested): the location core. Scans
+  the per-handshake GPS **sidecars** (`<capture>.hc22000.gps.json`) into a merged
+  `{BSSID: best-fix}` map (3D over 2D, more sats, most recent), reads the
+  continuous **track**, joins ESSIDs from the capture store and the recovered set
+  from the crack loot store into the located-networks list, and computes bounds /
+  route distance. Pure functions, dependency-injected, tolerant of half-written
+  files.
+- `plugins/gps.py`: the position source now also lays a continuous **breadcrumb**
+  (`gps-track.jsonl` in the capture store) — one point per fix, throttled by
+  distance/interval and self-trimming past a size cap, so a long drive's route is
+  bounded. Best-effort, like the existing sidecar/seam writes; off a device it is
+  simply skipped.
+- `plugins/map.py` (new, unit-tested): a local-only plugin (`location`,
+  `capture-read`, `ui`; **no `network`**, so no authorized-use ack). A **Map**
+  row button opens a full-screen Web-Mercator canvas: a **heatmap** of network
+  density (the hero), markers for every located AP (recovered lit apart from
+  uncracked, tap for details), the **route** polyline and a **live cursor** at the
+  current fix. Offline it draws a coordinate graticule + scale bar; online the
+  *viewing browser* (never the device) overlays OpenStreetMap tiles. The page
+  polls a small `data.json` endpoint on the same route (TTL-cached store scan,
+  shared with a dashboard readout card). Server-rendered, dependency-free, inline
+  JS/CSS — per `web-ui-conventions`.
+- `config.toml`: new `[plugins.map]` table (ships **disabled**; `tiles`,
+  `refresh_seconds`, `max_track_points`). One new table only.
+
+Touched: `geo.py` (new), `plugins/map.py` (new), `plugins/gps.py`, `config.toml`,
+user guide + README. Release impact: **app-layer-safe** (a package module, a new
+plugin file and a config table — no apt/pip/boot change, no new lib script). The
+live data flow is validated headless (Playwright render, JS parse-checked); an
+end-to-end drive with a real receiver is for the hardware pass. Tests: +40
+(`test_geo.py`, `test_map.py`). 997 pass, lint clean.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

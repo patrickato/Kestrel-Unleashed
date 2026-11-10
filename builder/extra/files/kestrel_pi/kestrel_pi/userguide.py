@@ -389,7 +389,7 @@ sudo kestrel plugins enable gps --set source=serial --set device=/dev/ttyACM0
 
 Run in a terminal, `plugins enable` also walks you through the options (secrets are masked). To change an option later, re-run `plugins enable <name> --set key=value` with the new value (or edit it on the plugin's web config page). Enabling does not require a reboot or even a daemon restart for the common cases. Disable with `sudo kestrel plugins disable <name>`, or the Disable control on the dashboard.
 
-The authorized-use acknowledgment: any plugin that sends data off the device (the `network` capability: `wpa-sec`, `wigle`, `backup`, `remote-train`, and `updates`) takes the same explicit authorized-use acknowledgment as capture before it turns on, whether you enable it from the dashboard or the terminal. In a terminal you are prompted; add `--yes` for scripts. The acknowledgment is remembered device-wide, so once you have enabled capture it is silent afterward. Local-only plugins (`memtemp`, `session-stats`, `ups-hat`, `eink`, and `gps` reading a local receiver) never need it.
+The authorized-use acknowledgment: any plugin that sends data off the device (the `network` capability: `wpa-sec`, `wigle`, `backup`, `remote-train`, and `updates`) takes the same explicit authorized-use acknowledgment as capture before it turns on, whether you enable it from the dashboard or the terminal. In a terminal you are prompted; add `--yes` for scripts. The acknowledgment is remembered device-wide, so once you have enabled capture it is silent afterward. Local-only plugins (`memtemp`, `session-stats`, `ups-hat`, `eink`, `map`, and `gps` reading a local receiver) never need it.
 
 Where things live: bundled plugins are in `/usr/local/lib/kestrel/plugins/`; your own overrides go in `/etc/kestrel/plugins/` (a plugin there with the same name takes precedence). Each plugin has a `[plugins.<name>]` table in `config.toml`; prefer the dashboard or the CLI over hand-editing. If a plugin shows an error, `sudo kestrel plugins info <name>` reports its health and `sudo journalctl -u kestrel-daemon` shows why it failed to load. A failed plugin never stops the daemon or the others. A plugin you add must subclass `Plugin` directly and write its declarations (`__options__`, `__capabilities__` and the like) as plain literals, because the device reads them without running the plugin; one that doesn't is listed as `invalid` by `kestrel plugins list` and is not loaded. The older `@plugins.on` decorator style is not supported.
 
@@ -420,6 +420,23 @@ The device's single position source: it keeps the current fix, tags captured han
 - `baud` is ignored for USB CDC-ACM receivers; set it only for a true UART. Reading local hardware, `gps` needs no authorized-use acknowledgment.
 
 The GPS card shows fix status (`no fix` / `2D fix` / `3D fix`), satellites in use, the signal strength, and latitude, longitude and altitude. The **Signal** row is the strongest satellite's carrier-to-noise in dB-Hz, with a plain read beside it — `no signal`, `very weak`, `weak`, `moderate`, `strong signal`, or, with a fix, `good`. Before a fix this tells you whether the receiver simply needs more time (a strong signal, acquiring) or a clearer view of the sky (a weak one), without reading raw NMEA. As a rule of thumb a fix needs a few satellites above ~30 dB-Hz. The reads update live as the signal changes — including if a fix is acquired and then lost, where the lines track the recovery. If the receiver stops sending data entirely (unplugged, powered off, or a stalled USB link), after about half a minute the card reads `no signal — receiver not responding` instead of holding the last values, so a dead receiver is obvious at a glance. See GPS note in [Troubleshooting](#troubleshooting) for cold-start timing.
+
+### map (the wardriving map)
+
+Turns everything `gps` records into a live map you open right in the dashboard — the view that makes the device a true wardriving tool and not just a capture box. Enable `gps` (with a receiver and a fix) and `map`, drive, and the **Map** button on the Plugins page opens a full-screen map with:
+
+- a **heatmap** showing where the air is thick with networks (the hero layer);
+- every located network as a **marker** — recovered networks lit in gold, still-uncracked ones in blue — tap one for its name, BSSID, coordinates and capture signal;
+- your **route** as a green breadcrumb trail, so you can see exactly where you drove; and
+- a **live cursor** at your current position that moves with you (turn on **Follow** to keep it centred).
+
+It is built to work with **no internet at all** — in a shielded lab or out of coverage it draws a proper coordinate grid with a distance scale, so the map is never blank. When the browser you are viewing from *is* online, it quietly overlays real OpenStreetMap street tiles underneath your data (the **Map tiles** button toggles them). The Kestrel itself never reaches out — the tiles, if used, are fetched by your own phone or laptop, not the device — so nothing about where you have been leaves the device on its own. The map reads only; it drives nothing.
+
+- Enable: `sudo kestrel plugins enable map` (local-only — no authorized-use acknowledgment).
+- A dashboard card summarises it at a glance: networks mapped, how many recovered, your route distance, and your live position.
+- Option `tiles` (default `true`): allow the viewing browser to pull OpenStreetMap street tiles when online. Set `false` to always use the offline grid — for a shielded lab, or simply to send no coordinates to a tile server.
+- Option `refresh_seconds` (default `5`, clamped 2–60): how often the open map polls for new captures and your latest position.
+- Option `max_track_points` (default `20000`): the most recent route points the map draws; the device keeps the breadcrumb trimmed so a long drive never grows it without bound.
 
 ### ups-hat (battery readout and auto-shutdown)
 
