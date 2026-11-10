@@ -61,6 +61,21 @@ def test_append_recovered_nothing_useful_is_zero(tmp_path):
     assert offload.append_recovered(str(tmp_path), "garbage\nlines\n") == 0
 
 
+def test_decode_and_ingest_utf16_from_powershell(tmp_path):
+    # The real-world bug: PowerShell's `>` writes recovered.txt as UTF-16 (with a
+    # BOM), which decoded as UTF-8 parses to nothing. decode_recovered must handle
+    # it, and append_recovered_path must read such a file end to end.
+    crack = str(tmp_path)
+    line = _hashline("aabbccddee01", "HomeNet") + ":pw12345678\n"
+    assert offload.decode_recovered(line.encode("utf-16")).lstrip("﻿").startswith("WPA*")
+    p = tmp_path / "recovered.txt"
+    p.write_bytes(line.encode("utf-16"))         # UTF-16 LE + BOM, like PowerShell
+    assert offload.append_recovered_path(crack, str(p)) == 1
+    # a UTF-8 BOM (utf-8-sig) is handled too
+    p.write_bytes(line.encode("utf-8-sig"))
+    assert offload.parse_recovered(offload.decode_recovered(p.read_bytes()))
+
+
 # --- reconcile --------------------------------------------------------------
 def test_reconcile_marks_uncracked_and_skips_cracked(tmp_path):
     crack = str(tmp_path)

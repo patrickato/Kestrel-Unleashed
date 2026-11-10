@@ -803,7 +803,8 @@ def create_app(daemon):
             return _loot_redirect(
                 ctl, "Choose the recovered.txt a GPU kit produced.", err=True)
         raw = upload.read(8 * 1024 * 1024)      # recovered.txt is small; cap it
-        text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+        # Tolerate the UTF-16/BOM a Windows front-end may produce, not just UTF-8.
+        text = crack_offload.decode_recovered(raw)
         added = crack_offload.append_recovered(CRACK_DIR, text)
         if not added:
             return _loot_redirect(

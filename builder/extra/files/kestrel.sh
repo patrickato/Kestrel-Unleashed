@@ -1841,10 +1841,9 @@ import sys
 from kestrel_pi.crack import offload
 crack_dir, path = sys.argv[1], sys.argv[2]
 try:
-    text = open(path, encoding="utf-8", errors="replace").read()
+    print(offload.append_recovered_path(crack_dir, path))
 except OSError as exc:
     sys.stderr.write("cannot read %s: %s\n" % (path, exc)); sys.exit(1)
-print(offload.append_recovered(crack_dir, text))
 ' "$PWN_CRACK_DIR" "$f") || die "ingest failed (is $1 the recovered.txt a kit produced?)"
     if [ "$n" = "0" ]; then
         echo "No new recovered keys found in $1."

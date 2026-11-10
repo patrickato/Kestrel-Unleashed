@@ -48,12 +48,37 @@ def parse_recovered(text):
     for its BSSID/ESSID. Lines that are not a valid hashline (a raw potfile whose
     hash form we can't key to an AP) are skipped, so a stray file never raises."""
     out = []
+    text = (text or "").lstrip("﻿")        # drop a stray BOM
     for hashline, password in parse_show(text):
         event = parse_hashline(hashline)
         if event is None or not event.bssid or not password:
             continue
         out.append((event.bssid.upper(), event.essid or "", password))
     return out
+
+
+def decode_recovered(raw):
+    """Decode recovered.txt bytes to text, tolerating the encodings the common
+    hashcat front-ends produce. Windows PowerShell's ``>`` redirect writes
+    **UTF-16** (with a BOM), which decoded as UTF-8 is unparseable garbage and
+    silently ingests nothing; this detects a UTF-16 or UTF-8 BOM and decodes
+    accordingly, else UTF-8. A ``str`` is returned unchanged."""
+    if isinstance(raw, str):
+        return raw
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw.decode("utf-16", errors="replace")
+    if raw[:3] == b"\xef\xbb\xbf":
+        return raw.decode("utf-8-sig", errors="replace")
+    return raw.decode("utf-8", errors="replace")
+
+
+def append_recovered_path(crack_dir, path):
+    """Read a recovered.txt from ``path`` (tolerating UTF-16/BOM via
+    :func:`decode_recovered`) and append it with :func:`append_recovered`.
+    Returns the number of newly-added recovered keys."""
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    return append_recovered(crack_dir, decode_recovered(raw))
 
 
 def append_recovered(crack_dir, text):
@@ -187,7 +212,9 @@ _CRACK_BAT = (
     "echo Cracking targets.hc22000 with %WL% ...\r\n"
     "hashcat -m 22000 -a 0 targets.hc22000 \"%WL%\" --potfile-path kestrel.potfile\r\n"
     "echo Writing recovered.txt ...\r\n"
-    "hashcat -m 22000 --show targets.hc22000 --potfile-path kestrel.potfile > recovered.txt\r\n"
+    "REM  --outfile (not a > redirect): PowerShell's > writes UTF-16, which the\r\n"
+    "REM  Kestrel can't parse; hashcat's --outfile is plain UTF-8.\r\n"
+    "hashcat -m 22000 --show targets.hc22000 --potfile-path kestrel.potfile --outfile recovered.txt\r\n"
     "echo.\r\n"
     "echo Done. Copy recovered.txt back to the Kestrel and run:\r\n"
     "echo     kestrel crack ingest recovered.txt\r\n"
@@ -209,7 +236,8 @@ _CRACK_SH = (
     'echo "Cracking targets.hc22000 with $WL ..."\n'
     'hashcat -m 22000 -a 0 targets.hc22000 "$WL" --potfile-path kestrel.potfile || true\n'
     'echo "Writing recovered.txt ..."\n'
-    "hashcat -m 22000 --show targets.hc22000 --potfile-path kestrel.potfile > recovered.txt\n"
+    "hashcat -m 22000 --show targets.hc22000 "
+    "--potfile-path kestrel.potfile --outfile recovered.txt\n"
     'echo\n'
     'echo "Done. Copy recovered.txt back to the Kestrel and run:"\n'
     'echo "    kestrel crack ingest recovered.txt"\n'
