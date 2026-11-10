@@ -32,6 +32,7 @@ from ..config import DEFAULT_CONFIG_PATH, load_config, section
 from . import (CRACK_DEFAULTS, CRACK_DIR, DEFAULT_CAPTURE_STORE, HARD_MAX_TEMP_C,
                POTFILE_NAME, STATUS_NAME)
 from . import aircrack as ac
+from . import offload as offload_mod
 from . import store as store_mod
 from . import wordlists as wl_mod
 from .store import LootStore
@@ -260,6 +261,12 @@ class CrackWorker:
         targets = targets_from_events(self._all_events())
         for target in targets:
             LootStore.upsert(aps, target, now=self._clock())
+        # Apply any GPU-offload results dropped in by `kestrel crack ingest`
+        # before this pass. The worker owns every loot write, so ingest only
+        # queues to a file and this single-owner step marks the records cracked
+        # (race-free). Runs before the enabled/aircrack gates so an offloaded key
+        # lands even when local cracking is off.
+        offload_mod.reconcile(aps, self.crack_dir, now=self._clock())
         wordlists = wl_mod.discover(conf.get("wordlists_dir"),
                                     conf.get("order", "size"))
         masks = [str(m).strip() for m in (conf.get("masks") or []) if str(m).strip()]

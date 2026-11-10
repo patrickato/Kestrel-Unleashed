@@ -2740,6 +2740,10 @@ def _loot_daemon(tmp_path, wl_dir, cap_dir, capfile, crack_enabled=True):
         def hashline_files(self):
             return [str(capfile)]
 
+        def read_events(self, path):
+            from kestrel_pi.capture import CaptureInterface
+            return CaptureInterface(str(cap_dir)).read_events(path)
+
         def captured_networks(self):
             return []
 
@@ -2820,6 +2824,71 @@ def test_loot_page_shows_cleartext_and_batch_crack_enqueues(monkeypatch, tmp_pat
     assert len(jobs) == 1
     assert jobs[0][1]["wordlist"].endswith("small.txt")
     assert jobs[0][1]["files"] == [str(capfile)]
+
+
+def test_loot_gpu_offload_section_download_and_ingest(monkeypatch, tmp_path):
+    pytest.importorskip("flask")
+    import io
+    import json
+    from kestrel_pi.crack import offload
+
+    crack_dir = tmp_path / "crack"; crack_dir.mkdir()
+    wl_dir = tmp_path / "wl"; wl_dir.mkdir()
+    cap_dir = tmp_path / "cap"; cap_dir.mkdir()
+    capfile = cap_dir / "HomeWiFi.hc22000"
+    hashline = "WPA*02*" + "a" * 32 + "*001122334455*665544332211*486f6d65*00*00"
+    capfile.write_text(hashline + "\n")
+    (crack_dir / "loot.json").write_text(json.dumps({"aps": {
+        "00:11:22:33:44:55": {"bssid": "00:11:22:33:44:55", "essid": "Home",
+                              "status": "pending", "password": "", "tried": []}}}))
+    monkeypatch.setattr(web, "CRACK_DIR", str(crack_dir))
+    monkeypatch.setattr(web, "iface_ipv4", lambda i: None)
+    client = web.create_app(
+        _loot_daemon(tmp_path, wl_dir, cap_dir, capfile)).test_client()
+
+    # the Loot page shows the GPU-offload section with its controls (auth on)
+    body = client.get("/loot", headers=_basic()).get_data(as_text=True)
+    assert "GPU offload" in body
+    assert "Download GPU crack kit" in body and "Ingest results" in body
+
+    # the kit downloads as a zip
+    kit = client.get("/loot/gpu-kit", headers=_basic())
+    assert kit.status_code == 200
+    assert kit.headers["Content-Type"] == "application/zip"
+    assert "attachment" in kit.headers["Content-Disposition"]
+    assert kit.get_data()[:2] == b"PK"           # zip magic
+
+    # ingest the recovered.txt a GPU box would produce; it lands in the reconcile
+    # file and a worker pass would mark the record cracked
+    csrf = _csrf(body)
+    recovered = (hashline + ":s3cretpass\n").encode()
+    resp = client.post("/loot/ingest", headers=_basic(),
+                       data={"csrf": csrf,
+                             "results": (io.BytesIO(recovered), "recovered.txt")},
+                       content_type="multipart/form-data")
+    assert resp.status_code in (302, 303)
+    aps = {"00:11:22:33:44:55": {"bssid": "00:11:22:33:44:55", "essid": "Home",
+                                 "status": "pending", "password": "", "tried": []}}
+    assert offload.reconcile(aps, str(crack_dir)) == 1
+    assert aps["00:11:22:33:44:55"]["password"] == "s3cretpass"
+
+
+def test_loot_gpu_controls_need_auth(monkeypatch, tmp_path):
+    pytest.importorskip("flask")
+    crack_dir = tmp_path / "crack"; crack_dir.mkdir()
+    wl_dir = tmp_path / "wl"; wl_dir.mkdir()
+    cap_dir = tmp_path / "cap"; cap_dir.mkdir()
+    capfile = cap_dir / "x.hc22000"; capfile.write_text("")
+    monkeypatch.setattr(web, "CRACK_DIR", str(crack_dir))
+    monkeypatch.setattr(web, "iface_ipv4", lambda i: None)
+    daemon = _loot_daemon(tmp_path, wl_dir, cap_dir, capfile)
+    # web auth off: the section explains itself but offers no controls
+    daemon.config["web"]["auth"] = "none"
+    client = web.create_app(daemon).test_client()
+    body = client.get("/loot").get_data(as_text=True)
+    assert "GPU offload" in body
+    assert "Download GPU crack kit" not in body
+    assert "Turn on the dashboard login" in body
 
 
 def test_loot_page_shows_wps_entry(monkeypatch, tmp_path):

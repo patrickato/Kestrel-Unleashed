@@ -69,6 +69,10 @@ Usage: $PROG <command>
                      Queue a manual crack of one or more capture files (re-run
                      what didn't crack against another wordlist/ruleset, or a
                      brute-force mask); omit --wordlist for all lists
+  crack kit [DIR]    Build a GPU crack kit (uncracked hashlines + hashcat scripts,
+                     zipped) to crack on a real GPU -- ~1000x faster, and the only
+                     way to crack PMKID; no SSH/keys, works fully offline
+  crack ingest FILE  Apply a GPU box's results (recovered.txt) back into the loot
   crack enable       Enable quick-crack (auto-crack new handshakes); disable to stop
   crack clear --yes  Clear the loot store (captures and wordlists untouched)
   wps                List WPS results (recovered keys show on /loot too)
@@ -1778,6 +1782,74 @@ print("  wrote %s" % out)
     echo "  sudo cp $out $wd/"
 }
 
+cmd_crack_kit() {
+    # Build a "GPU crack kit": the still-uncracked hashlines (PMKID included) plus
+    # ready-to-run hashcat scripts + README, zipped for the trip to a GPU box. The
+    # zero-config, air-gap-friendly offload path -- no SSH, no keys; you move the
+    # files. Runs as pi, writes into the pi-owned crack dir.
+    local out_dir="$PWN_CRACK_DIR/gpu-kit"
+    [ $# -gt 0 ] && { out_dir=$1; shift; }
+    [ $# -eq 0 ] || die "usage: $PROG crack kit [DIR]"
+    local result
+    result=$(run_as_pi "$PWN_VENV_PYTHON" -I -c '
+import sys, zipfile
+from kestrel_pi.capture import CaptureInterface
+from kestrel_pi.crack import offload
+from kestrel_pi.crack.store import LootStore
+store_dir, crack_dir, out_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+cap = CaptureInterface(store_dir)
+aps = LootStore(crack_dir).load()
+res = offload.build_kit(out_dir, cap.hashline_files(), aps, cap.read_events)
+zip_path = out_dir.rstrip("/") + ".zip"
+with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+    for name, p in res["files"].items():
+        z.write(p, name)
+print("%d" % res["targets"]); print(zip_path)
+' "$PWN_CAPTURE_DIR" "$PWN_CRACK_DIR" "$out_dir") || die "could not build the kit"
+    local targets zip_path
+    targets=$(printf '%s\n' "$result" | sed -n '1p')
+    zip_path=$(printf '%s\n' "$result" | sed -n '2p')
+    if [ "$targets" = "0" ]; then
+        echo "Nothing left to crack -- every captured network is already cracked."
+        echo "(An empty kit was still written to $zip_path.)"
+        return 0
+    fi
+    echo "Built a GPU crack kit: $targets network(s) still to crack (PMKID included)."
+    echo "  $zip_path"
+    echo
+    echo "Next: copy that .zip to a machine with a GPU, unzip it, and run crack.bat"
+    echo "(Windows) or ./crack.sh (Linux/Mac) with a wordlist. See the README inside."
+    echo "Bring the recovered.txt it produces back and run:  $PROG crack ingest recovered.txt"
+}
+
+cmd_crack_ingest() {
+    # Apply a GPU box's results (the recovered.txt a kit produced -- hashcat
+    # --show output) back into the loot store. Appends to a pi-owned reconcile
+    # file; the crack worker marks the records cracked on its next pass (it owns
+    # every loot write, so there is no race). Safe to run repeatedly.
+    [ $# -ge 1 ] || die "usage: $PROG crack ingest FILE   (the recovered.txt from a GPU kit)"
+    local f; f=$(readlink -f "$1" 2>/dev/null || echo "$1")
+    [ -f "$f" ] || die "no such file: $1"
+    local n
+    n=$(run_as_pi "$PWN_VENV_PYTHON" -I -c '
+import sys
+from kestrel_pi.crack import offload
+crack_dir, path = sys.argv[1], sys.argv[2]
+try:
+    text = open(path, encoding="utf-8", errors="replace").read()
+except OSError as exc:
+    sys.stderr.write("cannot read %s: %s\n" % (path, exc)); sys.exit(1)
+print(offload.append_recovered(crack_dir, text))
+' "$PWN_CRACK_DIR" "$f") || die "ingest failed (is $1 the recovered.txt a kit produced?)"
+    if [ "$n" = "0" ]; then
+        echo "No new recovered keys found in $1."
+        echo "Make sure it is the recovered.txt the kit produced (hashcat --show output)."
+        return 0
+    fi
+    echo "Queued $n recovered key(s). The cracker applies them within a few seconds --"
+    echo "watch them appear on the Loot page (and light up on the map)."
+}
+
 cmd_crack_run() {
     local wordlist="" mask="" wd f r w
     local files=() rules=() resolved=() rpaths=() wls=()
@@ -1910,10 +1982,12 @@ cmd_crack() {
         suggest) cmd_crack_suggest "$@" ;;
         wordlists|lists) cmd_crack_wordlists ;;
         run) cmd_crack_run "$@" ;;
+        kit) cmd_crack_kit "$@" ;;
+        ingest) cmd_crack_ingest "$@" ;;
         enable) cmd_crack_enable ;;
         disable) cmd_crack_disable ;;
         clear) cmd_crack_clear "$@" ;;
-        *) die "unknown 'crack' subcommand: $sub (status|list|show|suggest|wordlists|run|enable|disable|clear)" ;;
+        *) die "unknown 'crack' subcommand: $sub (status|list|show|suggest|wordlists|run|kit|ingest|enable|disable|clear)" ;;
     esac
 }
 

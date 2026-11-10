@@ -313,7 +313,27 @@ sudo kestrel crack disable           # turn auto-cracking off (and enable to tur
 
 Once a network yields a crackable handshake, capturing leaves it alone (one is enough — the password is the whole network's), and the cracker keeps that handshake until it cracks or every wordlist is exhausted. Add a new, bigger wordlist later and it automatically gets a fresh pass at everything still uncracked.
 
-**"No handshake" on a row:** the cracker runs **aircrack-ng**, which needs a captured **4-way handshake (EAPOL)** to work. For an access point with no connected client, capture often gets only a **PMKID** — enough to identify the AP, but not something aircrack-ng can crack (hashcat could, but the Pi can't run it). Those rows show **"no handshake"** instead of an error, and the whole cracker stays healthy. To turn one into a crackable target, have a client (a phone, a laptop) **connect or reconnect to that AP while capture is running** — the device forces and records the handshake, and the row becomes a normal pending target on the next pass.
+**"No handshake" on a row:** the cracker runs **aircrack-ng**, which needs a captured **4-way handshake (EAPOL)** to work. For an access point with no connected client, capture often gets only a **PMKID** — enough to identify the AP, but not something aircrack-ng can crack. Those rows show **"no handshake"** instead of an error, and the whole cracker stays healthy. Two ways to crack them anyway: have a client (a phone, a laptop) **connect or reconnect to that AP while capture is running** so the device records a full handshake, or **offload to a GPU** (next), which cracks the PMKID directly.
+
+### Crack faster on a GPU (and crack PMKID)
+
+The Pi's CPU cracks slowly — around a thousand guesses a second — and it cannot crack a PMKID at all. A desktop or laptop **GPU** running hashcat does roughly a thousand times more guesses a second *and* cracks PMKID, so for big wordlists, brute-force masks, or any PMKID-only network, hand the job to a real GPU. Kestrel makes this a file you carry, not a network setup: no SSH, no keys, and it works even with the Kestrel completely offline (copy the kit out on a USB stick, bring the answers back).
+
+On the **Loot** page (dashboard login on), open **GPU offload**:
+
+1. **Download GPU crack kit (.zip)** — a small zip with the still-uncracked networks (PMKID included) and ready-to-run scripts.
+2. On a machine with a GPU, install [hashcat](https://hashcat.net/hashcat/), unzip the kit, drop a wordlist next to it named `wordlist.txt` (rockyou is a fine start), and run `crack.bat` (Windows) or `./crack.sh` (Linux/Mac). The README inside spells it out, including how to run a brute-force mask for all-digit router keys.
+3. The script writes `recovered.txt`. Back on the Loot page, use **Ingest results** to upload it.
+
+The recovered keys then appear in the loot, light up on the map, and each one is automatically tried against your other networks too. From the terminal the same flow is:
+
+```bash
+kestrel crack kit                    # build the kit (prints the .zip path)
+# ... copy it to the GPU box, run crack.bat/crack.sh, bring recovered.txt back ...
+kestrel crack ingest recovered.txt   # apply the results
+```
+
+Ingesting is safe to repeat — keys you already have are ignored.
 
 ---
 

@@ -759,6 +759,60 @@ def create_app(daemon):
                     "process the queue.")
         return _loot_redirect(ctl, msg)
 
+    @app.get("/loot/gpu-kit")
+    def loot_gpu_kit():  # noqa: ANN202
+        # Build a GPU crack kit (uncracked hashlines + hashcat scripts + README)
+        # and serve it as a zip. Auth-gated like the other loot controls: it
+        # packages capture material. The daemon is pi and the crack dir is pi-
+        # owned, so this builds directly (no root apply socket).
+        ctl = control()
+        if not ctl["ready"]:
+            return html(_render_loot(daemon, ctl, message=CONTROLS_OFF,
+                                     error=True), 403)
+        import io
+        import zipfile
+        from .crack import offload as crack_offload
+        aps = crack_store.LootStore(CRACK_DIR).load()
+        res = crack_offload.build_kit(os.path.join(CRACK_DIR, "gpu-kit"),
+                                      daemon.capture.hashline_files(), aps,
+                                      daemon.capture.read_events)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for name, path in res["files"].items():
+                zf.write(path, name)
+        return Response(buf.getvalue(), headers={
+            "Content-Type": "application/zip",
+            "Content-Disposition": 'attachment; filename="kestrel-gpu-kit.zip"',
+            "Cache-Control": "no-store"})
+
+    @app.post("/loot/ingest")
+    def loot_ingest():  # noqa: ANN202
+        # Ingest a GPU box's recovered.txt (hashcat --show output). Appends to the
+        # pi-owned reconcile file; the crack worker marks the records cracked on
+        # its next pass (single-owner loot writes, so no race). Auth + CSRF gated.
+        ctl = control()
+        if not ctl["ready"]:
+            return html(_render_loot(daemon, ctl, message=CONTROLS_OFF,
+                                     error=True), 403)
+        if not _same(request.form.get("csrf") or "", csrf_token):
+            return _loot_redirect(ctl, "This page is out of date (the daemon "
+                                  "restarted); try again.", err=True)
+        from .crack import offload as crack_offload
+        upload = request.files.get("results")
+        if upload is None or not upload.filename:
+            return _loot_redirect(
+                ctl, "Choose the recovered.txt a GPU kit produced.", err=True)
+        raw = upload.read(8 * 1024 * 1024)      # recovered.txt is small; cap it
+        text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+        added = crack_offload.append_recovered(CRACK_DIR, text)
+        if not added:
+            return _loot_redirect(
+                ctl, "No new recovered keys in that file -- is it the kit's "
+                "recovered.txt (hashcat --show output)?", err=True)
+        return _loot_redirect(
+            ctl, "Queued %d recovered key(s); they appear here in a few seconds."
+            % added)
+
     @app.get("/wps")
     def wps_page():  # noqa: ANN202
         return html(_render_wps(daemon, control(),
@@ -2720,11 +2774,47 @@ def _render_loot(daemon, control=None, message=None, error=False):
 
     form = _loot_crack_form(daemon, control)
     guide = _loot_guide()
+    gpu = _loot_gpu_section(control)
     back = '<p><a href="' + _esc(_url("/", control)) + '">&larr; Dashboard</a></p>'
     return _page(
         "Loot - Kestrel",
-        back + "<h1>Loot</h1>" + banner + readout + table + guide + form,
+        back + "<h1>Loot</h1>" + banner + readout + table + form + gpu + guide,
     )
+
+
+def _loot_gpu_section(control=None):
+    """The GPU-offload controls on the Loot page: download a crack kit for a real
+    GPU and ingest the recovered.txt it produces. Both expose/accept capture
+    material, so they need web auth on; with controls off this shows just the
+    explanation. Native <details>, no JS -- a collapsed section like the guide."""
+    ready = bool(control and control.get("ready"))
+    intro = (
+        "<p class='hint'>The Pi cracks slowly and <strong>can't crack PMKID</strong> "
+        "at all. Offload to a real GPU: download a kit, run it on a desktop with "
+        "hashcat (about 1000&times; faster), then bring the results back here. "
+        "Nothing leaves the device on its own &mdash; you move the files, so it "
+        "works even fully offline.</p>")
+    if ready:
+        kit_url = _esc(_url("/loot/gpu-kit", control))
+        csrf = _esc((control or {}).get("csrf") or "")
+        action = _esc(_url("/loot/ingest", control))
+        controls = (
+            "<p><a class='viewtabs-link' href='" + kit_url + "' "
+            "style='display:inline-block;padding:.5em 1em;border:1px solid "
+            "var(--border);border-radius:8px;text-decoration:none;color:var(--link);"
+            "background:var(--card)'>&#8681; Download GPU crack kit (.zip)</a></p>"
+            "<form method='post' action='" + action + "' "
+            "enctype='multipart/form-data' class='formrow'>"
+            "<input type='hidden' name='csrf' value='" + csrf + "'>"
+            "<label>Ingest results (the kit's recovered.txt)"
+            "<input type='file' name='results' accept='.txt,.potfile,text/plain'>"
+            "</label><button type='submit'>Ingest results</button></form>")
+    else:
+        controls = ("<p class='notice'>Turn on the dashboard login to download a "
+                    "kit or ingest results.</p>")
+    return ("<details class='lootguide'><summary>GPU offload &mdash; crack on a "
+            "desktop GPU (and the only way to crack PMKID)</summary>"
+            "<div style='padding:0 1em 1em'>" + intro + controls + "</div></details>")
 
 
 # The on-device wordlist/ruleset reference: every combination the operator can

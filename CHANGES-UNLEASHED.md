@@ -420,6 +420,38 @@ Release impact: app-layer-safe (the CLI/package carry `web.py`). Validated by
 headless render (kiosk + phone widths) and the suite. Tests: +1 (dark-by-default
 + light palette defined), one theme test updated. 1007 pass, lint clean.
 
+### Added: GPU crack offload (and the only way to crack PMKID here)
+The Pi's aircrack-ng is slow and **cannot crack PMKID at all**. This adds a
+zero-config bridge to a real GPU running hashcat (~1000x faster, PMKID included)
+with **no SSH, no keys** — you move files, so it works with the device fully
+offline (a USB stick across the Faraday cage).
+
+- `kestrel_pi/crack/offload.py` (new, stdlib-only, unit-tested): `build_kit`
+  bundles the still-uncracked hashlines (PMKID included) + ready-to-run
+  `crack.bat`/`crack.sh` (run `hashcat -m 22000` and emit `recovered.txt` via
+  `--show`) + a README; `parse_recovered`/`append_recovered`/`reconcile` take the
+  returned `recovered.txt` back into the loot store.
+- **Race-free ingest:** the crack worker owns every loot write (it loads at the
+  top of a pass and saves at the end, and a pass can run minutes), so ingest only
+  *appends* recovered lines to a pi-owned reconcile file; the worker applies them
+  on its next pass (`controller.run_once` calls `offload.reconcile` before the
+  enabled/aircrack gates, so an offloaded key lands even when local cracking is
+  off). The same ingest path will serve an automated SSH offload later.
+- **CLI:** `kestrel crack kit [DIR]` (builds + zips the kit) and `kestrel crack
+  ingest FILE` (applies a GPU box's `recovered.txt`).
+- **Web:** a *GPU offload* section on the Loot page (auth on) with a **Download
+  GPU crack kit (.zip)** link (`GET /loot/gpu-kit`) and an **Ingest results** file
+  upload (`POST /loot/ingest`, CSRF-gated) — point-and-click on every UI.
+- Recovered keys land exactly like a local crack: shown on Loot, lit on the map,
+  and auto-reused against the other APs (they feed the existing reuse list).
+
+Touched: `crack/offload.py` (new), `crack/controller.py`, `kestrel.sh`, `web.py`,
+user guide + README. Release impact: **app-layer-safe** (package module + CLI +
+web, no apt/pip/boot/new-lib-script). Validated: the kit builds and its scripts
+are syntax- and shellcheck-clean; the round trip (build → recovered.txt → ingest
+→ reconcile → cracked) is unit-tested; a real GPU-box run is for the hardware
+pass. Tests: +17 (`test_offload.py`, Loot GPU web tests).
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,
