@@ -1985,7 +1985,7 @@ cmd_crack() {
         list|loot) cmd_crack_list "$@" ;;
         show) cmd_crack_show "$@" ;;
         suggest) cmd_crack_suggest "$@" ;;
-        wordlists|lists) cmd_crack_wordlists ;;
+        wordlists|lists) cmd_crack_wordlists "$@" ;;
         run) cmd_crack_run "$@" ;;
         kit) cmd_crack_kit "$@" ;;
         ingest) cmd_crack_ingest "$@" ;;
