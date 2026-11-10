@@ -58,6 +58,8 @@ With the `gps` and `map` plugins enabled, the dashboard grows a live wardriving 
 
 A **heatmap** shows where the air is thick with networks; every located AP is a **marker** (gold once its key is recovered, blue until then — tap for its name, BSSID, coordinates and capture signal); your **route** draws as a green breadcrumb; and a **live cursor** moves with you. Offline — in a shielded lab or out of coverage — it renders a proper coordinate grid with a distance scale, so it is never blank; when the browser you view from is online, it quietly overlays OpenStreetMap street tiles under your data. The Kestrel never reaches out for tiles itself, so nothing about where you have been leaves the device on its own. The image above is the offline grid view on sample data.
 
+One click **exports** the whole wardrive as **KML** (Google Earth), **GPX** (your route into any GPS app) or **WiGLE CSV** (the standard wardriving interchange) — so your captures are portable, never locked inside the device.
+
 ### The e-ink face
 
 With the optional `eink` plugin and a Waveshare 2.7" e-Paper HAT, the device wears an animated "tamagotchi" face whose expression follows real device and learning-agent state — it never plays a canned loop.

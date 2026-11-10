@@ -30,6 +30,7 @@ import time
 
 from kestrel_pi import Plugin
 from kestrel_pi import geo
+from kestrel_pi import geoexport
 
 # How long a store scan (sidecars + track) is reused before re-walking. The live
 # cursor is read fresh each poll (cheap, via the position service); only the
@@ -164,9 +165,28 @@ class Map(Plugin):
     def on_webhook(self, path, request):
         if path == "data.json":
             return self._data_response()
+        if path.startswith("export."):
+            return self._export_response(path[len("export."):])
         if path == "view":
             return self.context.page("Wardriving map", self._render_page())
         return self.context.redirect("No such view.", error=True)
+
+    def _export_response(self, fmt):
+        """Serve the located networks + route as a downloadable KML/GPX/WiGLE-CSV
+        file. An unknown format redirects back with a note rather than erroring."""
+        try:
+            data = self._collect()
+            content_type, ext, text = geoexport.export(
+                fmt, data["networks"], data["track"])
+        except KeyError:
+            return self.context.redirect("Unknown export format.", error=True)
+        body = text.encode("utf-8")
+        headers = {
+            "Content-Type": content_type,
+            "Content-Disposition": 'attachment; filename="kestrel-wardrive.%s"' % ext,
+            "Cache-Control": "no-store",
+        }
+        return (body, 200, headers)
 
     def _data_response(self):
         data = dict(self._collect())
@@ -228,6 +248,11 @@ _MAP_STYLE = (
     "color:#e7e7ea;cursor:pointer;backdrop-filter:blur(3px);}"
     ".map-ctl button.on{background:#1565c0;border-color:#1565c0;color:#fff;}"
     ".map-ctl button:active{transform:translateY(1px);}"
+    # download links styled as buttons; a leading rule mark separates them
+    ".map-ctl a.exp{font-size:.82rem;padding:.3em .6em;border-radius:8px;"
+    "border:1px solid rgba(255,255,255,.25);background:rgba(12,16,22,.78);"
+    "color:#9fd0ff;text-decoration:none;backdrop-filter:blur(3px);}"
+    ".map-ctl a.exp:first-of-type{margin-left:.5em;border-left-width:2px;}"
     ".map-zoom{position:absolute;right:.5em;bottom:1.6em;display:flex;"
     "flex-direction:column;gap:.3em;z-index:3;}"
     ".map-zoom button{width:2.1em;height:2.1em;font-size:1.1rem;line-height:1;"
@@ -268,6 +293,9 @@ _MAP_BODY = (
     '<button data-k="route" class="on">Route</button>'
     '<button data-k="tiles">Map tiles</button>'
     '<button data-k="recov">Recovered only</button>'
+    '<a class="exp" href="export.kml" download>KML</a>'
+    '<a class="exp" href="export.gpx" download>GPX</a>'
+    '<a class="exp" href="export.csv" download>CSV</a>'
     '</div>'
     '<div class="map-zoom"><button data-z="1">+</button>'
     '<button data-z="-1">&minus;</button></div>'

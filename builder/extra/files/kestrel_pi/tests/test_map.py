@@ -168,6 +168,29 @@ def test_unknown_subpath_redirects(tmp_path):
     assert result.__class__.__name__ == "PluginRedirect"
 
 
+# --- exports ---------------------------------------------------------------
+def test_export_endpoints_serve_downloads(tmp_path):
+    _seed(tmp_path, "aabbccddee01", "One", 40.0, -74.0)
+    _track(tmp_path, [(40.0, -74.0), (40.001, -74.0)])
+    p = _plugin(tmp_path)
+    for fmt, needle in (("kml", b"<kml"), ("gpx", b"<gpx"), ("csv", b"WigleWifi")):
+        body, status, headers = p.on_webhook("export." + fmt, None)
+        assert status == 200
+        assert needle in body
+        assert headers["Content-Disposition"].endswith('.%s"' % fmt)
+
+
+def test_export_links_are_on_the_page(tmp_path):
+    p = _plugin(tmp_path)
+    body = p.on_webhook("view", None).body
+    assert 'href="export.kml"' in body and 'href="export.csv"' in body
+
+
+def test_export_unknown_format_redirects(tmp_path):
+    p = _plugin(tmp_path)
+    assert p.on_webhook("export.shp", None).__class__.__name__ == "PluginRedirect"
+
+
 def test_refresh_seconds_is_clamped(tmp_path):
     assert _plugin(tmp_path, {"refresh_seconds": 999})._refresh_seconds() == MAP.MAX_REFRESH_S
     assert _plugin(tmp_path, {"refresh_seconds": 0})._refresh_seconds() == MAP.MIN_REFRESH_S

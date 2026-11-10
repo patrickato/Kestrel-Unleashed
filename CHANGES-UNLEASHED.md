@@ -382,13 +382,19 @@ no build step and no internet required**.
   JS/CSS — per `web-ui-conventions`.
 - `config.toml`: new `[plugins.map]` table (ships **disabled**; `tiles`,
   `refresh_seconds`, `max_track_points`). One new table only.
+- `kestrel_pi/geoexport.py` (new, stdlib-only, unit-tested) + map **export**
+  links/endpoints: one click (or a `curl` over the management link) downloads the
+  whole wardrive as **KML** (Google Earth), **GPX** (the route, for any GPS app)
+  or **WiGLE CSV** (the standard wardriving interchange). Columns the store never
+  measured (channel/RSSI/accuracy) are left empty, not fabricated.
 
-Touched: `geo.py` (new), `plugins/map.py` (new), `plugins/gps.py`, `config.toml`,
-user guide + README. Release impact: **app-layer-safe** (a package module, a new
-plugin file and a config table — no apt/pip/boot change, no new lib script). The
-live data flow is validated headless (Playwright render, JS parse-checked); an
-end-to-end drive with a real receiver is for the hardware pass. Tests: +40
-(`test_geo.py`, `test_map.py`). 997 pass, lint clean.
+Touched: `geo.py` (new), `geoexport.py` (new), `plugins/map.py` (new),
+`plugins/gps.py`, `config.toml`, user guide + README. Release impact:
+**app-layer-safe** (package modules, a new plugin file and a config table — no
+apt/pip/boot change, no new lib script). The live data flow is validated headless
+(Playwright render, JS parse-checked); an end-to-end drive with a real receiver
+is for the hardware pass. Tests: +49 (`test_geo.py`, `test_map.py`,
+`test_geoexport.py`).
 
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**

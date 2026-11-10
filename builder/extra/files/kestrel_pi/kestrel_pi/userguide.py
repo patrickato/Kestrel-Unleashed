@@ -434,6 +434,7 @@ It is built to work with **no internet at all** — in a shielded lab or out of 
 
 - Enable: `sudo kestrel plugins enable map` (local-only — no authorized-use acknowledgment).
 - A dashboard card summarises it at a glance: networks mapped, how many recovered, your route distance, and your live position.
+- **Export** your wardrive with the KML, GPX and CSV links on the map (or fetch them directly over the management link, e.g. `curl -o drive.kml http://<device>/plugins/map/export.kml`). KML opens in Google Earth, GPX carries your route into any GPS app, and the CSV is the standard WiGLE wardriving format — so your captures are never locked inside the device.
 - Option `tiles` (default `true`): allow the viewing browser to pull OpenStreetMap street tiles when online. Set `false` to always use the offline grid — for a shielded lab, or simply to send no coordinates to a tile server.
 - Option `refresh_seconds` (default `5`, clamped 2–60): how often the open map polls for new captures and your latest position.
 - Option `max_track_points` (default `20000`): the most recent route points the map draws; the device keeps the breadcrumb trimmed so a long drive never grows it without bound.
