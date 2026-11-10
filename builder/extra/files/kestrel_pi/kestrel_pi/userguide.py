@@ -335,6 +335,17 @@ kestrel crack ingest recovered.txt   # apply the results
 
 Ingesting is safe to repeat — keys you already have are ignored.
 
+**Automatic GPU offload (`remote-crack`).** If your GPU box is reachable over SSH and you'd rather not carry files, the `remote-crack` plugin does the whole loop for you: it offloads uncracked networks to hashcat on the host and brings the recovered keys back on its own. It's the turnkey version of the kit above; the manual kit is always there when the box is offline.
+
+```bash
+sudo kestrel plugins enable remote-crack \
+  --set crack_host=HOST --set crack_user=USER --set crack_path=/remote/dir \
+  --set wordlist=/path/on/host/rockyou.txt
+sudo kestrel remote-crack setup      # installs the device key on the host (password once)
+```
+
+Make sure hashcat is installed on the host and the `wordlist` path exists there. After that it runs on its own; the **Crack now** button on the plugin's dashboard row (or `kestrel remote-crack now`) forces a full re-offload — handy after you point it at a bigger host wordlist. A run is launched detached on the host, so a dropped Wi-Fi/Bluetooth link never kills it, and `kestrel remote-crack status` (or the dashboard card) shows the host and run state. Being a network plugin, enabling it takes the authorized-use acknowledgment; the GPU host is independent of the backup and training hosts.
+
 ---
 
 ## WPS attacks
@@ -409,7 +420,7 @@ sudo kestrel plugins enable gps --set source=serial --set device=/dev/ttyACM0
 
 Run in a terminal, `plugins enable` also walks you through the options (secrets are masked). To change an option later, re-run `plugins enable <name> --set key=value` with the new value (or edit it on the plugin's web config page). Enabling does not require a reboot or even a daemon restart for the common cases. Disable with `sudo kestrel plugins disable <name>`, or the Disable control on the dashboard.
 
-The authorized-use acknowledgment: any plugin that sends data off the device (the `network` capability: `wpa-sec`, `wigle`, `backup`, `remote-train`, and `updates`) takes the same explicit authorized-use acknowledgment as capture before it turns on, whether you enable it from the dashboard or the terminal. In a terminal you are prompted; add `--yes` for scripts. The acknowledgment is remembered device-wide, so once you have enabled capture it is silent afterward. Local-only plugins (`memtemp`, `session-stats`, `ups-hat`, `eink`, `map`, and `gps` reading a local receiver) never need it.
+The authorized-use acknowledgment: any plugin that sends data off the device (the `network` capability: `wpa-sec`, `wigle`, `backup`, `remote-train`, `remote-crack`, and `updates`) takes the same explicit authorized-use acknowledgment as capture before it turns on, whether you enable it from the dashboard or the terminal. In a terminal you are prompted; add `--yes` for scripts. The acknowledgment is remembered device-wide, so once you have enabled capture it is silent afterward. Local-only plugins (`memtemp`, `session-stats`, `ups-hat`, `eink`, `map`, and `gps` reading a local receiver) never need it.
 
 Where things live: bundled plugins are in `/usr/local/lib/kestrel/plugins/`; your own overrides go in `/etc/kestrel/plugins/` (a plugin there with the same name takes precedence). Each plugin has a `[plugins.<name>]` table in `config.toml`; prefer the dashboard or the CLI over hand-editing. If a plugin shows an error, `sudo kestrel plugins info <name>` reports its health and `sudo journalctl -u kestrel-daemon` shows why it failed to load. A failed plugin never stops the daemon or the others. A plugin you add must subclass `Plugin` directly and write its declarations (`__options__`, `__capabilities__` and the like) as plain literals, because the device reads them without running the plugin; one that doesn't is listed as `invalid` by `kestrel plugins list` and is not loaded. The older `@plugins.on` decorator style is not supported.
 

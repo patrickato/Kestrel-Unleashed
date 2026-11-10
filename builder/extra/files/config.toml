@@ -500,3 +500,34 @@ timesteps = 200000          # training timesteps per remote run (a desktop can a
 interval_seconds = 3600     # at most this often; also runs at start, on reconnect and on `remote-train now`
 timeout = 1800              # abort a single SSH/rsync operation after this many seconds
 agent_dir = "/var/lib/kestrel/agent"   # on-device agent runtime dir (episodes + models)
+
+[plugins.remote-crack]
+enabled = false             # auto-crack handshakes on a desktop GPU over SSH, opt-in
+# The turnkey alternative to the GPU crack *kit* (`kestrel crack kit`, which you
+# carry by hand): point this at a GPU box over SSH and it offloads your still-
+# uncracked networks (PMKID included) to hashcat there and brings the recovered
+# keys back on its own. A run is launched detached on the host (a dropped tether
+# never kills it) and the recovered keys land exactly like a local crack. Set
+# host/user/path/wordlist (never baked in) and enable in one step:
+#   sudo kestrel plugins enable remote-crack --set crack_host=HOST --set crack_user=USER \
+#        --set crack_path=/remote/dir --set wordlist=/path/on/host/rockyou.txt
+# Then install the device key for passwordless SSH (asks the remote password
+# once, stores nothing): sudo kestrel remote-crack setup
+# It ships captured material off-device, so enabling it takes the authorized-use
+# acknowledgment like the other networked plugins. The GPU host is independent of
+# the backup and training hosts.
+crack_host = ""             # the GPU host's hostname or IP
+crack_user = ""             # remote account to crack as
+# Working directory on the host, created if missing (a bare name is relative to
+# the remote account's home; a leading slash is absolute). Holds the uploaded
+# targets, the persistent hashcat potfile and the recovered.txt.
+crack_path = ""
+crack_port = 22
+ssh_key = "/home/pi/.ssh/id_ed25519"   # the pi account's key, authorized on the host by setup
+wordlist = ""               # path to the wordlist ON THE GPU HOST (e.g. its own rockyou.txt)
+hashcat = "hashcat"         # the hashcat binary on the host (name on PATH or an absolute path)
+extra_args = ""             # optional extra hashcat flags, e.g. "-O -w 3" (each passed as one argv item)
+auto = true                 # offload new uncracked targets on their own; false = only on the button / `remote-crack now`
+interval_seconds = 900      # at most this often check for new targets / finished runs; also on reconnect and the button
+stale_lock_hours = 12       # a running lock older than this is treated as a crashed run
+timeout = 600               # abort a single SSH/rsync operation after this many seconds

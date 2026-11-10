@@ -452,6 +452,36 @@ are syntax- and shellcheck-clean; the round trip (build → recovered.txt → in
 → reconcile → cracked) is unit-tested; a real GPU-box run is for the hardware
 pass. Tests: +17 (`test_offload.py`, Loot GPU web tests).
 
+### Added: remote-crack — automatic GPU offload over SSH
+The turnkey companion to the manual GPU kit: a new opt-in `remote-crack` plugin
+that offloads uncracked networks (PMKID included) to hashcat on a desktop GPU
+over SSH and brings the recovered keys back on its own — no file-shuffling.
+
+- `plugins/remote-crack.py` (new, unit-tested): mirrors the `remote-train` SSH
+  job model, simpler. A crack run is launched **detached** on the host
+  (`setsid`) with a `crack.lock` marker, so a dropped tether never kills it; the
+  plugin polls the lock and, when a run finishes, pulls the host's
+  `recovered.txt` (hashcat `--show` output) and feeds it through the **same**
+  `offload.append_recovered` → worker-reconcile path as the manual kit (race-free,
+  single-owner loot writes). Auto mode offloads each uncracked BSSID once (new
+  captures), and the **Crack now** row button / `remote-crack now` forces a full
+  re-offload. The button triggers in-process (same daemon), so it needs no root
+  apply target.
+- Declares the `network` capability (authorized-use ack) and copies as the
+  device's own key over passwordless SSH (`kestrel remote-crack setup`), storing
+  no secret. The GPU host is independent of the backup and training hosts.
+- `config.toml`: new `[plugins.remote-crack]` table (ships **disabled**:
+  host/user/path/wordlist/hashcat/auto/interval/…). CLI `kestrel remote-crack
+  {setup,now,status}` in `kestrel.sh` (mirrors `remote-train`). Reuses the ssh/
+  rsync already present for backup/remote-train — **no new apt package**.
+
+Touched: `plugins/remote-crack.py` (new), `config.toml`, `kestrel.sh`, user guide
++ README, `test_plugins_apply.py` (roster). Release impact: **app-layer-safe**
+(a plugin file + config + CLI; no apt/pip/boot/new-lib-script). Device-side logic
+(launch decision, finished-run collection, the shared ingest, launch-script
+quoting) is unit-tested with the SSH ops stubbed; a real GPU-box run is for the
+hardware pass. Tests: +8 (`test_remote_crack.py`). 1028 pass, lint clean.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

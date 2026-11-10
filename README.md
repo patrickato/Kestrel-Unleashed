@@ -224,6 +224,8 @@ The web **Loot** page (dashboard → *Loot*, with `[web] auth` on) shows the sam
 
 The Pi's CPU is slow and can't crack a PMKID at all; a desktop **GPU** running hashcat is ~1000× faster and cracks PMKID. Kestrel offloads to one without any networking — you move files, so it works with the device fully offline. On the Loot page's **GPU offload** section (or `kestrel crack kit`), download a zip of the still-uncracked hashlines (PMKID included) plus ready-to-run `crack.bat`/`crack.sh`; run it on the GPU box with a wordlist; then **Ingest results** (or `kestrel crack ingest recovered.txt`) uploads the `recovered.txt` it produced. The recovered keys land in the loot exactly like a local crack — shown on Loot, lit on the map, and reused against your other networks. The worker owns every loot write, so an ingest never races it. This is the force-multiplier: the Pi stays the always-on capture box, the GPU does the heavy cracking, and it's the only way to turn a PMKID into a password here.
 
+For a hands-off setup, the opt-in **`remote-crack`** plugin automates the whole loop over SSH: point it at a GPU host and a wordlist, run `kestrel remote-crack setup` once, and it offloads uncracked networks to hashcat there and ingests the results on its own (runs launched detached on the host, so a dropped link never kills them). The manual kit stays available for when the host is offline.
+
 ### Wordlists — how and where to add your own
 
 Cracking only does something once a wordlist is present. Two curated lists ship so it works out of the box (`starter.txt`, and a larger WPA-focused `wpa-top.txt`); add your own (e.g. `rockyou.txt`, or the SecLists WiFi-WPA lists) one of two ways:

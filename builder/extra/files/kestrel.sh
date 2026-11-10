@@ -126,6 +126,11 @@ Usage: $PROG <command>
   remote-train setup    Install the device's SSH key on the training host (asks
                      its password once, stores nothing) for passwordless training
   remote-train now   Reconcile now: push data, train due models, pull results
+  remote-crack       GPU-offload menu (auto-crack handshakes on a desktop GPU)
+  remote-crack status   Show the GPU host, SSH state and run state
+  remote-crack setup    Install the device's SSH key on the GPU host (asks its
+                     password once, stores nothing) for passwordless offload
+  remote-crack now   Offload every uncracked network to the GPU host now
   update             Update menu (check for and apply a new release)
   update status      Show the installed version and any available release
   update check       Check for a new release now (don't wait out the interval)
@@ -2383,6 +2388,128 @@ cmd_remote_train() {
     esac
 }
 
+## remote-crack (offload cracking to a desktop GPU over SSH) ################
+# The turnkey alternative to the carry-by-hand GPU kit: set a host + wordlist,
+# install the device key once, and the plugin auto-offloads uncracked networks to
+# hashcat on the GPU box and ingests the recovered keys. Setup prompts for the
+# remote password once (terminal-only, like backup/remote-train setup).
+
+REMOTE_CRACK_KEY_DEFAULT=/home/pi/.ssh/id_ed25519
+remote_crack_require_pi_or_root() { [ "$(id -un)" = pi ] || need_root; }
+
+cmd_remote_crack_setup() {
+    remote_crack_require_pi_or_root
+    local host user port key pub
+    host=$(cfg plugins.remote-crack.crack_host "")
+    user=$(cfg plugins.remote-crack.crack_user "")
+    port=$(cfg plugins.remote-crack.crack_port 22)
+    key=$(cfg plugins.remote-crack.ssh_key "$REMOTE_CRACK_KEY_DEFAULT")
+    { [ -n "$host" ] && [ -n "$user" ]; } \
+        || die "set the GPU host first: sudo $PROG plugins enable remote-crack --set crack_host=HOST --set crack_user=USER --set crack_path=/remote/dir --set wordlist=/path/on/host/rockyou.txt"
+    pub="$key.pub"
+    if ! run_as_pi test -f "$key"; then
+        log "generating an SSH key for the pi account ($key)"
+        run_as_pi ssh-keygen -t ed25519 -N "" -f "$key" -C "kestrel" \
+            || die "ssh-keygen failed"
+    fi
+    echo "Installing the device public key on $user@$host (the GPU host)."
+    echo "You'll be asked for the REMOTE account's password once; it is sent only"
+    echo "to ssh-copy-id to authorize the key and is never stored."
+    run_as_pi ssh-copy-id -i "$pub" -p "$port" "$user@$host" \
+        || die "ssh-copy-id failed (wrong password, or the host refuses password login?)"
+    echo "Verifying passwordless login..."
+    run_as_pi ssh -i "$key" -p "$port" -o BatchMode=yes \
+        -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "$user@$host" true \
+        || die "key installed but the test login failed; check the remote account"
+    log "passwordless SSH to the GPU host works"
+    echo "Make sure hashcat is installed on the host and the wordlist path exists"
+    echo "there. The plugin will offload uncracked networks on its next cycle."
+    remote_crack_touch_now
+}
+
+# Drop the "crack now" trigger the plugin watches (pi-owned crack dir).
+remote_crack_touch_now() {
+    mkdir -p "$PWN_CRACK_DIR"
+    : > "$PWN_CRACK_DIR/.remote-crack-now"
+    chown pi:pi "$PWN_CRACK_DIR/.remote-crack-now" 2>/dev/null || true
+}
+
+cmd_remote_crack_now() {
+    remote_crack_require_pi_or_root
+    [ "$(cfg plugins.remote-crack.enabled false)" = true ] \
+        || echo "note: the remote-crack plugin is not enabled; enable it to offload." >&2
+    remote_crack_touch_now
+    echo "Asked remote-crack to offload every uncracked network to the GPU host now."
+    echo "Recovered keys land on the Loot page (and the map) within a few seconds of"
+    echo "the run finishing. Watch '$PROG remote-crack status' or the dashboard card."
+}
+
+cmd_remote_crack_status() {
+    local host user path port key
+    host=$(cfg plugins.remote-crack.crack_host "")
+    user=$(cfg plugins.remote-crack.crack_user "")
+    path=$(cfg plugins.remote-crack.crack_path "")
+    port=$(cfg plugins.remote-crack.crack_port 22)
+    key=$(cfg plugins.remote-crack.ssh_key "$REMOTE_CRACK_KEY_DEFAULT")
+    echo "Remote crack (GPU offload):"
+    echo "  plugin: $(cfg plugins.remote-crack.enabled false | grep -qx true && echo enabled || echo disabled)"
+    echo "  wordlist (on host): $(cfg plugins.remote-crack.wordlist '(unset)')"
+    if [ -z "$host" ] || [ -z "$user" ] || [ -z "$path" ]; then
+        echo "  host: not configured (set crack_host/crack_user/crack_path, then '$PROG remote-crack setup')"
+        return 0
+    fi
+    echo "  host: $user@$host:$path"
+    if ! run_as_pi test -f "$key"; then
+        echo "  passwordless SSH: no device key yet (run 'sudo $PROG remote-crack setup')"
+        return 0
+    fi
+    if run_as_pi ssh -i "$key" -p "$port" -o BatchMode=yes \
+        -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "$user@$host" true 2>/dev/null; then
+        echo "  passwordless SSH: works"
+    else
+        echo "  passwordless SSH: not set up (run 'sudo $PROG remote-crack setup')"
+        return 0
+    fi
+    run_as_pi ssh -i "$key" -p "$port" -o BatchMode=yes \
+        -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "$user@$host" \
+        "cd $(shell_quote "$path") 2>/dev/null || exit 0; \
+         if [ -f crack.lock ]; then echo \"  host: cracking (since epoch \$(cat crack.lock))\"; \
+         elif [ -f crack.result ]; then echo \"  host: last run -> \$(cat crack.result)\"; \
+         else echo '  host: idle'; fi" \
+        2>/dev/null || echo "  host state: unavailable"
+    echo "  run progress also shows on the remote-crack dashboard card"
+}
+
+cmd_remote_crack_menu() {
+    have_whiptail || { cmd_remote_crack_status; return 0; }
+    while true; do
+        local choice
+        choice=$(whiptail --title "kestrel remote crack" \
+            --menu "Offload cracking to a desktop GPU over SSH" 16 72 4 \
+            status "Show the GPU host and run state" \
+            setup "Install the device key on the GPU host (asks its password)" \
+            now "Offload every uncracked network now" \
+            quit "Back" 3>&1 1>&2 2>&3) || return 0
+        case "$choice" in
+            status) run_box "Remote crack status" 20 76 cmd_remote_crack_status ;;
+            setup) ( cmd_remote_crack_setup ) || true ;;
+            now) run_box "Remote crack now" 14 72 cmd_remote_crack_now ;;
+            quit) return 0 ;;
+        esac
+    done
+}
+
+cmd_remote_crack() {
+    [ $# -gt 0 ] || { cmd_remote_crack_menu; return; }
+    local sub=$1; shift
+    case "$sub" in
+        status) cmd_remote_crack_status ;;
+        setup) cmd_remote_crack_setup ;;
+        now) cmd_remote_crack_now ;;
+        *) die "unknown 'remote-crack' subcommand: $sub (status|setup|now)" ;;
+    esac
+}
+
 ## update (in-place app-layer update) #####################################
 # The updates plugin's shared state. The pi daemon writes it, so root only ever
 # READS it, as a hint (which release to offer): `update apply` re-verifies the
@@ -2740,6 +2867,7 @@ cmd_setup() {
             backup) cmd_backup_menu ;;
             agent) cmd_agent_menu ;;
             remote-train) cmd_remote_train_menu ;;
+            remote-crack) cmd_remote_crack_menu ;;
             status) run_box "Status" 24 74 cmd_status_all ;;
             quit) return 0 ;;
         esac
@@ -2762,6 +2890,7 @@ main() {
         backup) cmd_backup "$@" ;;
         agent) cmd_agent "$@" ;;
         remote-train) cmd_remote_train "$@" ;;
+        remote-crack) cmd_remote_crack "$@" ;;
         update) cmd_update "$@" ;;
         status) cmd_status_all ;;
         help|-h|--help) usage ;;
