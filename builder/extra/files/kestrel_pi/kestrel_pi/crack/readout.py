@@ -68,6 +68,7 @@ _STATE_LABEL = {
     "paused-thermal": "paused (hot)",
     "disabled": "disabled",
     "no-aircrack": "aircrack-ng missing",
+    "no-cracker": "no cracker installed",
     "no-capture": "waiting for a capture",
     "no-wordlists": "no wordlists",
     "error": "error",

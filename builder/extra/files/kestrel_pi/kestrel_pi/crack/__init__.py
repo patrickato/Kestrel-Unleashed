@@ -66,6 +66,10 @@ HARD_MAX_TEMP_C = 85
 # code (an in-place update does not rewrite config.toml, so new keys default here).
 CRACK_DEFAULTS = {
     "enabled": True,
+    "engine": "auto",           # on-device cracker: auto (john if present, else
+                                # aircrack-ng) | john | aircrack. john reads the
+                                # .hc22000 store directly (EAPOL + PMKID + rules);
+                                # aircrack needs a packet capture (EAPOL only).
     "wordlists_dir": DEFAULT_WORDLISTS_DIR,
     "order": "size",
     "rules": [],

@@ -507,6 +507,38 @@ overlay, renderer and the worker's write/clear are unit-tested
 (`test_progress.py`), and the aircrack stream itself is for the hardware pass.
 Tests: +13. 1042 pass, lint clean.
 
+### Added: John the Ripper on-device engine — crack the hc22000 store on CPU
+aircrack-ng (the Pi's CPU engine) needs a packet capture and can read neither the
+`.hc22000` hashline store nor a PMKID; hashcat can't run on the Pi's pocl. So the
+*stored backlog* (whose raw captures housekeeping deleted) had no on-device
+cracker — only the GPU offload. **John the Ripper jumbo** cracks both EAPOL and
+PMKID on the CPU, with rules, reading only the hashline store, so it is now the
+preferred on-device engine when installed.
+
+- New `kestrel_pi/crack/john.py`: converts a hc22000 **PMKID** line to John's
+  wpapsk line (a field reshuffle), and a hc22000 **EAPOL** line to a hashcat
+  `hccapx` record that John's shipped `hccapx2john.py` turns into a wpapsk line
+  (STA nonce read from the EAPOL frame, key version from its key-info bits).
+  **Both were proven end to end against a real john jumbo** — it recovers the
+  known passphrase from a synthesized PMKID *and* a synthesized WPA2 handshake,
+  and `parse_show` maps each crack back to the right BSSID.
+- `[crack] engine` = `auto` (default) | `john` | `aircrack`. `auto` picks John
+  only when a *jumbo* build is present (`have_john()` requires the `hccapx2john`
+  marker, so a stray Debian **core** `john` — which has no wpapsk — is never
+  chosen); otherwise aircrack-ng, unchanged. The worker's John path is isolated
+  from the proven aircrack path.
+- `kestrel crack watch` understands John's `--progress-every` status line too.
+
+Touched: `kestrel_pi/crack/{john.py (new),__init__.py,controller.py,readout.py}`,
+`config.toml`, user guide, `deferred.md`. Release impact: the **code is
+app-layer-safe** and inert without John (current devices keep aircrack), but the
+capability needs the **jumbo `john` binary on the image**, which is
+**reflash-class** and cannot be built/validated from CI or a cloud session
+(Debian ships only core `john`; jumbo must be compiled for arm64) — it is written
+up in `deferred.md` for the hardware/release pass, alongside a note to let John
+crack all APs in one multi-salt run. Tests: +13 (`test_john.py`, plus engine
+wiring/selection in `test_crack.py`); 1055 pass, lint clean.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

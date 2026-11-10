@@ -32,6 +32,7 @@ from ..config import DEFAULT_CONFIG_PATH, load_config, section
 from . import (CRACK_DEFAULTS, CRACK_DIR, DEFAULT_CAPTURE_STORE, HARD_MAX_TEMP_C,
                POTFILE_NAME, STATUS_NAME)
 from . import aircrack as ac
+from . import john as john_mod
 from . import offload as offload_mod
 from . import progress as progress_mod
 from . import store as store_mod
@@ -128,6 +129,7 @@ class CrackWorker:
         # crack grinds (the live view). On-device only (main() sets it); off in
         # tests, which drive the injected runner and read output in one shot.
         self._stream = stream
+        self._py = "python3"         # interpreter for john's hccapx2john.py helper
         self._last_error = ""        # last hashcat failure, surfaced in status
         os.makedirs(crack_dir, exist_ok=True)
 
@@ -354,34 +356,44 @@ class CrackWorker:
 
         state, did_work, current = "idle", False, None
         self._last_error = ""
+        engine = self._engine(conf)
         if not conf.get("enabled", True):
             state = "disabled"
-        elif not (ac.have_aircrack() and ac.have_tcpdump()):
-            state = "no-aircrack"
-        else:
-            pcaps = self._prepare_pcaps()
-            if not pcaps:
-                # aircrack cracks from the packet capture; nothing to do until the
-                # rolling pcapng has handshakes (the hashline store isn't enough).
-                state = "no-capture"
+        elif engine == "john":
+            # John reads the .hc22000 store directly (EAPOL + PMKID + rules), so it
+            # needs no packet capture and cracks the stored backlog too. Isolated
+            # from the aircrack path below so that proven path is untouched.
+            state, did_work, current = self._crack_pass_john(
+                aps, targets, attacks, conf, recrack)
+        elif engine == "aircrack":
+            if not (ac.have_aircrack() and ac.have_tcpdump()):
+                state = "no-aircrack"
             else:
-                jobs = store_mod.list_jobs(self.crack_dir)
-                if jobs:
-                    state, current = "cracking", self._run_manual(jobs[0], aps, pcaps, conf)
-                    did_work = True
-                elif not attacks:
-                    state = "no-wordlists"
+                pcaps = self._prepare_pcaps()
+                if not pcaps:
+                    # aircrack cracks from the packet capture; nothing to do until
+                    # the rolling pcapng has handshakes (hashlines aren't enough).
+                    state = "no-capture"
                 else:
-                    batch = store_mod.next_auto_batch(aps, targets, attacks, recrack)
-                    if batch is not None:
-                        current, progressed = self._run_auto(batch, aps, pcaps, conf)
-                        if progressed:
-                            state, did_work = "cracking", True
-                        else:
-                            # Only no-handshake (or errored) APs this pass -- there
-                            # is nothing to grind, so idle and sleep rather than
-                            # hot-loop; a real error still flips to "error" below.
-                            state, current, did_work = "idle", None, False
+                    jobs = store_mod.list_jobs(self.crack_dir)
+                    if jobs:
+                        state, current = "cracking", self._run_manual(jobs[0], aps, pcaps, conf)
+                        did_work = True
+                    elif not attacks:
+                        state = "no-wordlists"
+                    else:
+                        batch = store_mod.next_auto_batch(aps, targets, attacks, recrack)
+                        if batch is not None:
+                            current, progressed = self._run_auto(batch, aps, pcaps, conf)
+                            if progressed:
+                                state, did_work = "cracking", True
+                            else:
+                                # Only no-handshake (or errored) APs this pass --
+                                # nothing to grind, so idle and sleep rather than
+                                # hot-loop; a real error still flips to "error".
+                                state, current, did_work = "idle", None, False
+        else:
+            state = "no-cracker"        # neither john nor aircrack is installed
 
         LootStore.refresh_statuses(aps, all_sigs)
         self.loot.save(aps)
@@ -499,6 +511,198 @@ class CrackWorker:
         store_mod.remove_job(path)
         return {"essid": job.get("label") or attack["name"], "bssid": "",
                 "wordlist": attack["name"], "origin": "manual", "started": now}
+
+    # -- john engine (cracks the .hc22000 store directly) -----------------
+    def _engine(self, conf):
+        """Which on-device cracker to use, from ``[crack] engine``: ``auto``
+        (John when installed, else aircrack-ng), ``john``, or ``aircrack``.
+        Returns ``None`` when the chosen/only engine isn't installed."""
+        choice = str(conf.get("engine", "auto") or "auto").lower()
+        if choice == "john":
+            return "john" if john_mod.have_john() else None
+        if choice == "aircrack":
+            return "aircrack"
+        return "john" if john_mod.have_john() else "aircrack"
+
+    def _crack_pass_john(self, aps, targets, attacks, conf, recrack):
+        """One John pass over the ``.hc22000`` store: a queued manual job first,
+        else the next auto batch. Returns ``(state, did_work, current)``."""
+        jobs = store_mod.list_jobs(self.crack_dir)
+        if jobs:
+            return "cracking", True, self._run_manual_john(jobs[0], aps, conf)
+        if not attacks:
+            return "no-wordlists", False, None
+        batch = store_mod.next_auto_batch(aps, targets, attacks, recrack)
+        if batch is None:
+            return "idle", False, None
+        current, progressed = self._run_auto_john(batch, aps, conf)
+        return ("cracking", True, current) if progressed else ("idle", False, None)
+
+    def _john_attack(self, targets, attack, conf, origin):
+        """Run ``attack`` (John) against each target AP; ``{BSSID: password}``."""
+        cracked = {}
+        for target in targets:
+            bssid = (target.get("bssid") or "").upper()
+            if not bssid:
+                continue
+            password = self._crack_one_john(target, attack, conf, origin)
+            if password:
+                cracked[bssid] = password
+        return cracked
+
+    def _run_auto_john(self, batch, aps, conf):
+        attack, tgts = batch
+        cracked = self._john_attack(tgts, attack, conf, "auto")
+        now = self._clock()
+        progressed = False
+        for target in tgts:
+            bssid = target["bssid"].upper()
+            rec = aps.get(bssid)
+            if rec is None:
+                continue
+            rec["no_handshake"] = False          # the hashline IS the handshake
+            if bssid in cracked:
+                LootStore.mark_cracked(rec, cracked[bssid], attack["name"], now=now)
+            else:
+                LootStore.mark_tried(rec, attack["sig"])
+            progressed = True
+        current = {"essid": tgts[0].get("essid"), "bssid": tgts[0].get("bssid"),
+                   "wordlist": attack["name"], "origin": "auto", "started": now}
+        return current, progressed
+
+    def _run_manual_john(self, job_entry, aps, conf):
+        path, job = job_entry
+        mask = (job.get("mask") or "").strip()
+        wordlist = job.get("wordlist") or ""
+        if mask:
+            attack = {"kind": "mask", "name": mask, "mask": mask,
+                      "sig": store_mod.mask_sig(mask)}
+        else:
+            attack = {"kind": "dict", "name": os.path.basename(wordlist),
+                      "path": wordlist, "sig": self._wordlist_sig(wordlist)}
+        files = [f for f in (job.get("files") or []) if os.path.isfile(f)]
+        events = []
+        for f in files:
+            events.extend(self.capture.read_events(f))
+        targets = targets_from_events(events)
+        for target in targets:
+            LootStore.upsert(aps, target, now=self._clock())
+        cracked = self._john_attack(targets, attack, conf, "manual") if targets else {}
+        now = self._clock()
+        for target in targets:
+            bssid = target["bssid"].upper()
+            rec = aps.get(bssid)
+            if rec is None:
+                continue
+            rec["no_handshake"] = False
+            if bssid in cracked:
+                LootStore.mark_cracked(rec, cracked[bssid], attack["name"], now=now)
+            elif attack["sig"]:
+                LootStore.mark_tried(rec, attack["sig"])
+        store_mod.remove_job(path)
+        return {"essid": job.get("label") or attack["name"], "bssid": "",
+                "wordlist": attack["name"], "origin": "manual", "started": now}
+
+    def _build_john_hashfile(self, lines):  # pragma: no cover
+        """Convert hc22000 ``lines`` to a John wpapsk hashfile: PMKID lines
+        directly, EAPOL via John's ``hccapx2john.py`` on a packed hccapx blob.
+        Returns the hashfile path, or ``None`` if nothing converted."""
+        work = os.path.join(self.crack_dir, ".john")
+        os.makedirs(work, exist_ok=True)
+        pmkids, blob = john_mod.split_sources(lines)
+        parts = list(pmkids)
+        if blob:
+            helper = john_mod.find_hccapx2john()
+            if helper:
+                hcxf = os.path.join(work, "batch.hccapx")
+                with open(hcxf, "wb") as fh:
+                    fh.write(blob)
+                _rc, out, _err = self._runner([self._py, helper, hcxf], timeout=60)
+                if out and out.strip():
+                    parts.append(out.strip())
+        if not parts:
+            return None
+        hashfile = os.path.join(work, "batch.john")
+        with open(hashfile, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(p for p in parts if p) + "\n")
+        return hashfile
+
+    def _crack_one_john(self, target, attack, conf, origin=""):  # pragma: no cover
+        """Crack one AP against the John hashfile built from its hashlines.
+        Returns the recovered passphrase or ``None``. On-device; tests override
+        this (like ``_run_mask``) and the full path is proven end to end."""
+        lines = target.get("lines") or (
+            [target["hashline"]] if target.get("hashline") else [])
+        if not lines:
+            return None
+        hashfile = self._build_john_hashfile(lines)
+        if not hashfile:
+            return None
+        bssid = (target.get("bssid") or "").upper()
+        pot = os.path.join(self.crack_dir, "john.pot")
+        timeout = int(conf.get("max_job_seconds") or 0) or None
+        base = {"state": "cracking", "bssid": bssid,
+                "essid": target.get("essid") or "", "wordlist": attack.get("name", ""),
+                "origin": origin, "started": self._clock()}
+        progress_mod.write_progress(self.crack_dir, base, now=self._clock())
+        if attack.get("kind") == "mask":
+            jmask = john_mod.mask_to_john(attack.get("mask", ""))
+            if jmask is None:
+                return None                       # mask John can't express: skip
+            cmd = john_mod.build_mask_cmd(hashfile, jmask, pot)
+        else:
+            wl = attack.get("path", "")
+            if not os.path.isfile(wl):
+                return None
+            rules = conf.get("rules") or []
+            rule = rules[0] if isinstance(rules, (list, tuple)) and rules else None
+            cmd = john_mod.build_crack_cmd(hashfile, wl, pot, rules=rule)
+        if self._stream:
+            self._run_john_streaming(cmd, base, timeout)
+        else:
+            self._runner(cmd, timeout=timeout)
+        _rc, out, _err = self._runner(john_mod.build_show_cmd(hashfile, pot), timeout=60)
+        for found_bssid, _essid, password in john_mod.parse_show(out or ""):
+            if found_bssid.upper() == bssid:
+                return password
+        return None
+
+    def _run_john_streaming(self, cmd, base, timeout):  # pragma: no cover
+        """Run John, reading its ``--progress-every`` status lines and writing the
+        live record. Cracks go to the potfile regardless; this is only the feed."""
+        import select
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+        except FileNotFoundError:
+            return
+        deadline = (self._clock() + timeout) if timeout else None
+        buf = b""
+        try:
+            while True:
+                if deadline and self._clock() > deadline:
+                    proc.kill()
+                    break
+                ready, _, _ = select.select([proc.stdout], [], [], 2.0)
+                if ready:
+                    chunk = os.read(proc.stdout.fileno(), 4096)
+                    if not chunk:
+                        break
+                    buf = (buf + chunk)[-8192:]
+                    prog = john_mod.parse_progress(buf.decode("utf-8", "replace"))
+                    if prog:
+                        progress_mod.write_progress(
+                            self.crack_dir, dict(base, **prog), now=self._clock())
+                if proc.poll() is not None and not ready:
+                    break
+        finally:
+            try:
+                if proc.poll() is None:
+                    proc.kill()
+                if proc.stdout:
+                    proc.stdout.close()
+            except OSError:
+                pass
 
     @staticmethod
     def _wordlist_sig(path):

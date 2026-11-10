@@ -517,6 +517,46 @@ def test_manual_mask_job(tmp_path):
 
 # --- readout ----------------------------------------------------------------
 
+def test_run_once_john_engine_cracks_the_store(tmp_path, monkeypatch):
+    # With John installed, engine "auto" picks it, and John reads the .hc22000
+    # store directly -- no pcap needed. The subprocess crack is proven end to end
+    # elsewhere; here we override it (like _run_mask) and check the worker wiring:
+    # AP1 cracks, AP2 exhausts, and it all happens with NO capture present.
+    import kestrel_pi.crack.john as john_mod
+    monkeypatch.setattr(john_mod, "have_john", lambda *a, **k: True)
+    d = str(tmp_path)
+    _write(os.path.join(d, "wordlists", "small.txt"), "hunter2!\n")
+    _write(os.path.join(d, "capture", "nets.hc22000"),
+           _hashline(AP1, "HomeWiFi") + "\n" + _hashline(AP2, "Office") + "\n")
+    cfg = _config(d, os.path.join(d, "wordlists"))
+    worker = _worker(tmp_path, cfg, FakeAircrack(), pcapng=False)   # no pcapng!
+
+    def fake_john(target, attack, conf, origin=""):
+        return "hunter2!" if target["bssid"].upper() == AP1C else None
+    worker._crack_one_john = fake_john
+
+    for _ in range(12):
+        _s, did = worker.run_once()
+        if not did:
+            break
+    aps = worker.loot.load()
+    assert aps[AP1C]["status"] == "cracked" and aps[AP1C]["password"] == "hunter2!"
+    assert aps[AP2C]["status"] == "exhausted"          # tried every list, no crack
+    assert readout.read_status(worker.crack_dir)["state"] in ("idle", "cracking")
+
+
+def test_engine_selection_auto_john_aircrack(tmp_path, monkeypatch):
+    import kestrel_pi.crack.john as john_mod
+    cfg = _config(str(tmp_path), os.path.join(str(tmp_path), "wordlists"))
+    w = _worker(tmp_path, cfg, FakeAircrack())
+    monkeypatch.setattr(john_mod, "have_john", lambda *a, **k: True)
+    assert w._engine({"engine": "auto"}) == "john"      # auto prefers John
+    assert w._engine({"engine": "aircrack"}) == "aircrack"
+    monkeypatch.setattr(john_mod, "have_john", lambda *a, **k: False)
+    assert w._engine({"engine": "auto"}) == "aircrack"   # auto falls back
+    assert w._engine({"engine": "john"}) is None         # asked for John, absent
+
+
 def test_readout_widget_elements():
     status = {"state": "cracking", "targets": 10, "cracked": 3, "pending": 6,
               "exhausted": 1, "wordlists": 2, "queue": 1, "temp_c": 61.0,

@@ -109,6 +109,12 @@ enabled = true              # auto-crack new handshakes as they are captured.
                             # Inert with no wordlists present (nothing to try),
                             # so it is safe to leave on; a shipped starter list and
                             # any you add arm it. `kestrel crack disable` stops it.
+# On-device cracker: "auto" (John the Ripper if installed, else aircrack-ng),
+# "john", or "aircrack". John reads the .hc22000 store directly -- EAPOL AND
+# PMKID, with rules -- so it cracks the stored backlog with no packet capture;
+# aircrack-ng needs a live/retained capture and does EAPOL only. (A desktop GPU
+# via `kestrel crack kit` / remote-crack is far faster for large backlogs.)
+engine = "auto"
 # Where wordlists live on the device. Every readable file here is a candidate.
 # Add your own by copying into this dir (scp) or by staging them on the boot
 # partition under /boot/firmware/kestrel-wordlists/ (auto-moved here on first
