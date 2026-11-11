@@ -64,7 +64,7 @@ def _service_recorder(active=("capture", "agent", "daemon"), fail_cmds=()):
     (e.g. ``"backup now"``)."""
     calls = []
     key_of = {ua.CAPTURE_SERVICE: "capture", ua.AGENT_SERVICE: "agent",
-              ua.DAEMON: "daemon"}
+              ua.CRACK_SERVICE: "crack", ua.DAEMON: "daemon"}
 
     def runner(cmd, **kwargs):
         calls.append(list(cmd))
@@ -301,19 +301,21 @@ def _apply_kwargs(tmp_path, **extra):
 
 
 def test_apply_update_quiesces_before_and_restores_after(tmp_path):
-    calls, runner = _service_recorder(active=("capture", "agent", "daemon"))
+    calls, runner = _service_recorder(active=("capture", "agent", "crack", "daemon"))
     ok, err = ua.apply_update(REPO, "0.5.0", runner=runner, **_apply_kwargs(tmp_path))
     assert ok, err
-    # All three are stopped, agent -> capture -> daemon.
+    # All are stopped, agent -> crack -> capture -> daemon.
     stop_agent = calls.index(["systemctl", "stop", ua.AGENT_SERVICE])
+    stop_crack = calls.index(["systemctl", "stop", ua.CRACK_SERVICE])
     stop_capture = calls.index(["systemctl", "stop", ua.CAPTURE_SERVICE])
     stop_daemon = calls.index(["systemctl", "stop", ua.DAEMON])
-    assert stop_agent < stop_capture < stop_daemon
+    assert stop_agent < stop_crack < stop_capture < stop_daemon
     # The restore comes after every stop: daemon-reload, then restart/starts.
     reload_at = calls.index(["systemctl", "daemon-reload"])
     assert reload_at > stop_daemon
     assert ["systemctl", "restart", ua.DAEMON] in calls
     assert ["systemctl", "start", ua.CAPTURE_SERVICE] in calls
+    assert ["systemctl", "start", ua.CRACK_SERVICE] in calls
     assert ["systemctl", "start", ua.AGENT_SERVICE] in calls
 
 
@@ -324,9 +326,11 @@ def test_apply_update_restores_only_services_that_were_running(tmp_path):
     assert ["systemctl", "stop", ua.DAEMON] in calls
     assert ["systemctl", "stop", ua.CAPTURE_SERVICE] not in calls
     assert ["systemctl", "stop", ua.AGENT_SERVICE] not in calls
+    assert ["systemctl", "stop", ua.CRACK_SERVICE] not in calls
     assert ["systemctl", "restart", ua.DAEMON] in calls
     assert ["systemctl", "start", ua.CAPTURE_SERVICE] not in calls
     assert ["systemctl", "start", ua.AGENT_SERVICE] not in calls
+    assert ["systemctl", "start", ua.CRACK_SERVICE] not in calls
 
 
 def test_apply_update_backs_up_before_touching_files_when_configured(tmp_path):

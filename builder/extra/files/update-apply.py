@@ -112,10 +112,13 @@ VENV_PIP = "/home/pi/.venv/bin/pip"
 VENV_PY = "/home/pi/.venv/bin/python"
 PACKAGE_DIST = "kestrel-pi"
 DAEMON = "kestrel-daemon.service"
-# The two other services that write device state; paused before the update and
-# restarted afterwards (if they were running).
+# The other services that write device state or run the reinstalled code; paused
+# before the update and restarted afterwards (if they were running). The crack
+# worker runs the kestrel_pi package we reinstall, so it must bounce too or it
+# keeps serving the pre-update code until the next reboot.
 CAPTURE_SERVICE = "kestrel-capture.service"
 AGENT_SERVICE = "kestrel-agent.service"
+CRACK_SERVICE = "kestrel-crack.service"
 # Boot-time recovery of an interrupted update; enabled by the engine too, so a
 # device that got it through an app-layer update has it on.
 RECOVER_SERVICE = "kestrel-update-recover.service"
@@ -480,17 +483,19 @@ def _service_active(service, runner=run):
 
 
 def quiesce_services(runner=run):
-    """Before any file is replaced, stop the three services that write device
-    state, so nothing changes under the update or races the pre-update backup.
-    Returns which were running (to restart afterwards). Order: the learning
-    agent first (its SIGTERM handler stops cleanly and its model saves are
-    atomic), then capture, then the daemon."""
+    """Before any file is replaced, stop the services that write device state, so
+    nothing changes under the update or races the pre-update backup. Returns which
+    were running (to restart afterwards). Order: the learning agent first (its
+    SIGTERM handler stops cleanly and its model saves are atomic), then the crack
+    worker, then capture, then the daemon."""
     prior = {
         "capture": _service_active(CAPTURE_SERVICE, runner=runner),
         "agent": _service_active(AGENT_SERVICE, runner=runner),
+        "crack": _service_active(CRACK_SERVICE, runner=runner),
         "daemon": _service_active(DAEMON, runner=runner),
     }
     for key, service in (("agent", AGENT_SERVICE),
+                         ("crack", CRACK_SERVICE),
                          ("capture", CAPTURE_SERVICE),
                          ("daemon", DAEMON)):
         if prior[key]:
@@ -500,14 +505,16 @@ def quiesce_services(runner=run):
 
 def restore_services(prior, runner=run):
     """Restart whatever was running before the update: ``daemon-reload`` so new
-    units take effect, then the daemon (to load the new code), then capture and
-    the agent - each only if it was active before, so a service the operator had
-    stopped stays stopped. May raise if systemd is unreachable."""
+    units take effect, then the daemon (to load the new code), then capture, the
+    crack worker and the agent - each only if it was active before, so a service
+    the operator had stopped stays stopped. May raise if systemd is unreachable."""
     runner(["systemctl", "daemon-reload"], check=False)
     if prior.get("daemon"):
         runner(["systemctl", "restart", DAEMON], check=False)
     if prior.get("capture"):
         runner(["systemctl", "start", CAPTURE_SERVICE], check=False)
+    if prior.get("crack"):
+        runner(["systemctl", "start", CRACK_SERVICE], check=False)
     if prior.get("agent"):
         runner(["systemctl", "start", AGENT_SERVICE], check=False)
 

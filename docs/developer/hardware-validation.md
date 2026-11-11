@@ -191,27 +191,55 @@ back into **Loot** on the next worker pass without touching the Pi by hand.
 
 The John engine code ships, but Debian's stock `john` is the crippled **core**
 build (no WPA). Install a **jumbo** build for arm64 so `engine: john` lights up.
-Build it on an arm64 Pi or builder (not in a cloud session — no arm64 there):
+Build it on the Pi (proven on a Pi 5, aarch64 — ~3 min):
 
 ```
-git clone https://github.com/openwall/john.git
+sudo apt-get update
+sudo apt-get install -y build-essential libssl-dev
+cd /tmp
+rm -rf john
+git clone --depth 1 https://github.com/openwall/john.git
 cd john/src
 ./configure
 make -sj$(nproc)
+../run/john --test=0 --format=wpapsk
 ```
 
-Install the `run/` tree so `john`, `hccapx2john.py` and `wpapcap2john` land
-**together** on a dir on `PATH` (co-location is how the device detects jumbo),
-with John's `*.conf` data alongside. Then on the device:
+That last line must say `PASS`. Install the whole `run/` tree to a stable
+location, then put the three tools on `PATH` — **`john` via a wrapper, not a
+symlink** (John finds its `john.conf` relative to how it's invoked; a bare
+symlink makes it look in `/usr/local/bin` and fail with "Cannot find John home",
+so the wrapper calls the real binary by full path):
 
 ```
+sudo mkdir -p /opt/kestrel
+sudo cp -a /tmp/john/run /opt/kestrel/john
+sudo tee /usr/local/bin/john >/dev/null <<'EOF'
+#!/bin/sh
+exec /opt/kestrel/john/john "$@"
+EOF
+sudo chmod +x /usr/local/bin/john
+sudo ln -sf /opt/kestrel/john/hccapx2john.py /usr/local/bin/hccapx2john.py
+sudo ln -sf /opt/kestrel/john/wpapcap2john /usr/local/bin/wpapcap2john
+```
+
+Verify and switch the engine on. The crack worker must restart to detect John
+and load the engine code (the in-place updater does this for you from the release
+that adds the restart; a hand build needs it once):
+
+```
+john --test=0 --format=wpapsk
+sudo systemctl restart kestrel-crack.service
 kestrel crack status
 ```
 
-Confirm it now reports `engine: john`. Validate end to end with V2 — a **stored**
-PMKID network and a **stored** EAPOL network both cracking on the CPU with no
-capture present. (Prefer baking the built binary into the image build; see
-`docs/developer/deferred.md`. This is reflash-class.)
+Confirm it now reports `engine: john (active)` and `no-handshake` drops toward 0
+as John reads the hashline store. Then watch it work: `kestrel crack watch`.
+Validate end to end with V2 — a **stored** PMKID network and a **stored** EAPOL
+network both cracking on the CPU with no capture present. (Prefer baking the
+built binary into the image build; see `docs/developer/deferred.md`. This is
+reflash-class, and John grinds hard on four cores — the thermal governor pauses
+it at `max_temp_c` and resumes.)
 
 **PASS:** `kestrel crack status` shows `engine: john`, and a stored PMKID and a
 stored EAPOL network each crack on-device under V2.
