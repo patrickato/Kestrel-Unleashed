@@ -31,13 +31,14 @@ lint tools but not these; `pip install flask requests numpy` (into the same
 interpreter) gets most of the suite running, and installing the ML stack is only
 worth it when you are changing the agent env/policies.
 
-## This is not the CI gate
+## CI runs these
 
-The **Lint** workflow (`make lint`) is the only check CI runs on a push/PR, and
-it only **byte-compiles** the package (`py_compile`) — it does not run `pytest`.
-So a green PR means lint passed, *not* that the unit tests ran. Run `make test`
-yourself whenever you change anything under
-`builder/extra/files/kestrel_pi/`.
+Two workflows run on every push/PR: **Lint** (`make lint` — `ansible-playbook
+--syntax-check`, `yamllint`, `shellcheck`, and a `py_compile` byte-compile of the
+package) and **Test** (`.forgejo/workflows/test.yml`, which runs `make test` —
+the `pytest` suite). A green PR means both passed. Still run `make test` yourself
+while iterating under `builder/extra/files/kestrel_pi/` so you catch failures
+before the push.
 
 ## Layout and coverage
 

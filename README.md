@@ -4,7 +4,7 @@
 
 # Kestrel-Unleashed
 
-> **A modified fork of [Kestrel](https://git.3ntropy.io/aluminum-ice/kestrel) by aluminum-ice**, released under the same license (GPL-3.0-or-later). This fork is tuned for authorized use in an isolated personal lab: capture and the learning agent are **enabled by default** and the authorized-use acknowledgment is pre-satisfied for the operator's own networks. See **[CHANGES-UNLEASHED.md](CHANGES-UNLEASHED.md)** for every change and **[NOTICE](NOTICE)** for attribution. This fork is independent and does not represent or speak for upstream Kestrel.
+> **A modified fork of [Kestrel](https://git.3ntropy.io/aluminum-ice/kestrel) by aluminum-ice**, released under the same license (GPL-3.0-or-later). This fork is tuned for authorized use in an isolated personal lab: capture is **enabled by default** with the authorized-use acknowledgment pre-satisfied for the operator's own networks, while the learning agent is **opt-in** — it ships off (it needs ~4 GB RAM and a model) and you enable it when you want it. See **[CHANGES-UNLEASHED.md](CHANGES-UNLEASHED.md)** for every change and **[NOTICE](NOTICE)** for attribution. This fork is independent and does not represent or speak for upstream Kestrel.
 >
 > **Use only on networks you own or are explicitly authorized to test. Unauthorized use may be illegal.**
 
@@ -34,7 +34,7 @@ Target boards: the **Raspberry Pi 5** is the primary, standard board. The Raspbe
 
 ## Web interface
 
-The device serves a mobile-first web dashboard over its management link (Bluetooth PAN or Wi-Fi). It shows live status, how busy the RF environment is around you, per-plugin readout cards and the learning agent, and it drives capture, plugins and power — all server-rendered, dependency-free and dark-mode aware.
+The device serves a mobile-first web dashboard over its management link (Bluetooth PAN or Wi-Fi). It shows live status, how busy the RF environment is around you, per-plugin readout cards and the learning agent, and it drives capture, plugins and power — all server-rendered, offline-capable and dark-mode aware.
 
 <p align="center">
   <img src="docs/images/web-ui.png" alt="Kestrel web UI on a phone: the dashboard, plugins and AI agent pages" width="840">
