@@ -191,20 +191,34 @@ def _plugin(name, state="loaded"):
             "capability_violations": [], "reason": "", "note": "", "last_error": ""}
 
 
-def test_dashboard_has_map_nav_card_when_map_plugin_loaded():
-    # The wardriving map is promoted to a one-tap home-screen card so it is
-    # reachable on an on-device display (the kiosk) without digging through the
-    # Plugins page; it links straight to the map's own view.
-    html = web._render_status(_status([_plugin("map")]), _ctl())
-    assert 'href="/plugins/map/view"' in html
-    assert "Wardriving map" in html
+def test_map_widget_tile_links_to_the_map_view():
+    # The map's own dashboard tile carries an "Open map" link to its page, so on
+    # the kiosk the map opens from its tile instead of being hunted for under
+    # Plugins. (A plugin named in links gets the Open link on its own card.)
+    widgets = {"map": [{"name": "route", "label": "Route", "value": "390 m"}]}
+    html = web._render_widgets(widgets, plugins=[_plugin("map")],
+                               links={"map": "/plugins/map/view"})
+    assert 'class="wopen"' in html and 'href="/plugins/map/view"' in html
+    assert "Open map" in html
 
 
-def test_dashboard_hides_map_nav_card_unless_map_plugin_is_loaded():
-    # No card when the map plugin is absent or present-but-disabled - its page
-    # exists only while the plugin is loaded, so a card then would 404.
-    assert 'href="/plugins/map/view"' not in web._render_status(_status([]), _ctl())
-    disabled = _status([_plugin("map", state="disabled")])
+def test_widget_tile_has_no_open_link_without_a_configured_link():
+    # Ordinary readout tiles (no page of their own) get no Open link.
+    widgets = {"memtemp": [{"name": "mem", "label": "Memory", "value": "5%"}]}
+    html = web._render_widgets(widgets, plugins=[_plugin("memtemp")], links={})
+    assert 'class="wopen"' not in html
+
+
+def test_dashboard_links_the_map_tile_only_while_map_is_loaded():
+    # End to end through the dashboard: the Open-map link appears when the map
+    # plugin is loaded and contributes its tile, and not when it is disabled.
+    loaded = dict(_status([_plugin("map")]),
+                  widgets={"map": [{"name": "route", "label": "Route",
+                                    "value": "390 m"}]})
+    assert 'href="/plugins/map/view"' in web._render_status(loaded, _ctl())
+    disabled = dict(_status([_plugin("map", state="disabled")]),
+                    widgets={"map": [{"name": "route", "label": "Route",
+                                      "value": "390 m"}]})
     assert 'href="/plugins/map/view"' not in web._render_status(disabled, _ctl())
 
 

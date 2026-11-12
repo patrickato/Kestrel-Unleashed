@@ -1599,6 +1599,12 @@ _STATUS_CSS = (
     ".widget dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:.3em .8em;align-items:baseline;}"
     ".widget dt{color:var(--muted);font-size:.9rem;}"
     ".widget dd{margin:0;text-align:left;overflow-wrap:anywhere;font-variant-numeric:tabular-nums;font-weight:600;}"
+    # "Open" link on a plugin tile that owns a page (e.g. the map): a full-width,
+    # touch-sized target so it opens straight from the dashboard on the kiosk.
+    ".widget .wopen{display:block;margin-top:.7em;padding:.5em .6em;text-align:center;"
+    "border:1px solid var(--border);border-radius:.4em;color:var(--link);"
+    "text-decoration:none;font-weight:600;}"
+    ".widget .wopen:hover,.widget .wopen:focus{border-color:var(--link);}"
     ".bar{position:relative;grid-column:1/-1;height:.45em;border-radius:999px;"
     "background:var(--off-bg);overflow:hidden;margin:-.1em 0 .25em;}"
     ".bar>span{display:block;height:100%;background:var(--accent);}"
@@ -2029,14 +2035,18 @@ def _wbr(text):
     return re.sub(r"\.(?!\d)", ".<wbr>", text)
 
 
-def _render_widgets(widgets, plugins=None, plugins_url="/plugins"):
+def _render_widgets(widgets, plugins=None, plugins_url="/plugins", links=None):
     """Per-plugin readout cards from the grouped UI element model
     (``{plugin: [{name,label,value,kind}, ...]}``). Values are escaped; a
     ``percent``/``gauge`` element adds a bar from the numeric part of its value.
     A plugin that is quarantined/failed (from the ``plugins`` health list) gets a
     subtle "stopped" badge linking to the Plugins page, where the reason shows.
+    A plugin named in ``links`` (``{plugin: url}``) gets a touch-friendly "Open"
+    link on its own card, so a plugin that owns a page (the map) is opened
+    straight from its dashboard tile instead of being buried on the Plugins page.
     Returns an empty string when no plugin registered any element."""
     health = {p.get("name"): p for p in (plugins or [])}
+    links = links or {}
     cards = []
     for plugin in sorted(widgets or {}):
         elements = widgets[plugin] or []
@@ -2070,9 +2080,17 @@ def _render_widgets(widgets, plugins=None, plugins_url="/plugins"):
             badge = ('<a class="wbadge" href="' + _esc(plugins_url)
                      + '" title="' + _esc(reason) + '">stopped</a>')
             attr = ' data-state="stopped"'
+        # A plugin that owns a page gets an Open link on its own tile (a big,
+        # touch-friendly target for the on-device kiosk), so the map is opened
+        # straight from its dashboard card rather than hunted for under Plugins.
+        open_link = ""
+        url = links.get(plugin)
+        if url:
+            open_link = ('<a class="wopen" href="' + _esc(url) + '">Open '
+                         + _esc(plugin) + " &rarr;</a>")
         cards.append('<div class="widget"' + attr + ' data-plugin="'
                      + _esc(plugin) + '"><h3>' + _esc(plugin) + badge
-                     + "</h3><dl>" + "".join(rows) + "</dl></div>")
+                     + "</h3><dl>" + "".join(rows) + "</dl>" + open_link + "</div>")
     if not cards:
         return ""
     # No section heading: each card is titled with its plugin name, so a
@@ -2199,26 +2217,6 @@ def _portal_nav(control):
         '<div class="scol"><span class="skey">Evil-portal</span>'
         '<span class="sval">' + summ + "</span>"
         '<span class="smeta">Captive-portal rogue AP (authorized use)</span></div>'
-        '<span class="arrow" aria-hidden="true">&rarr;</span></a>'
-    )
-
-
-def _map_nav(plugins, control):
-    """Dashboard nav card for the wardriving map (``/plugins/map/view``), shown
-    only when the map plugin is loaded (its page exists only then). Promotes the
-    map to a one-tap card on the home screen so it is reachable on an on-device
-    display (the kiosk) without digging through the Plugins page - the map is a
-    first-class wardriving view, not a buried plugin action."""
-    loaded = any(p.get("name") == "map" and p.get("state") == "loaded"
-                 for p in (plugins or []))
-    if not loaded:
-        return ""
-    return (
-        '<a class="navcard" href="' + _esc(_url("/plugins/map/view", control)) + '">'
-        '<div class="scol"><span class="skey">Wardriving map</span>'
-        '<span class="sval">live route &amp; located networks</span>'
-        '<span class="smeta">Your position, track and captured APs on a map</span>'
-        "</div>"
         '<span class="arrow" aria-hidden="true">&rarr;</span></a>'
     )
 
@@ -3404,8 +3402,15 @@ def _render_status(status, control=None, message=None, error=False, addresses=No
     # still in status["widgets"]).
     dash_widgets = {k: v for k, v in (status.get("widgets") or {}).items()
                     if k not in (AGENT_CARD_NAME, CRACK_CARD_NAME)}
+    # The map plugin owns a page, so its dashboard tile links straight to it (one
+    # tap on the kiosk), shown only while the plugin is loaded (its page exists
+    # only then). Other plugins with a page can be added here the same way.
+    widget_links = {}
+    if any(p.get("name") == "map" and p.get("state") == "loaded" for p in plugins):
+        widget_links["map"] = _url("/plugins/map/view", control)
     widgets_html = _render_widgets(dash_widgets, plugins=plugins,
-                                   plugins_url=_url("/plugins", control))
+                                   plugins_url=_url("/plugins", control),
+                                   links=widget_links)
 
     total = len(plugins)
     if control is not None:
@@ -3426,7 +3431,6 @@ def _render_status(status, control=None, message=None, error=False, addresses=No
         + ' AP(s)</span>'
         '<span class="smeta">Browse by network or access point</span></div>'
         '<span class="arrow" aria-hidden="true">&rarr;</span></a>'
-        + _map_nav(plugins, control)
         + _loot_nav(status.get("crack"), control)
         + _wps_nav(control)
         + _portal_nav(control)
