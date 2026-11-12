@@ -253,8 +253,9 @@ class Map(Plugin):
         refresh_ms = str(self._refresh_seconds() * 1000)
         # The page is one self-contained document: a full-bleed canvas, a control
         # bar, a legend and a tooltip, with all behaviour in the inline script
-        # below. No framework, no build step, no external library (OSM tiles are
-        # the one optional network fetch, done by the browser, not the device).
+        # below. Hand-rolled rather than a map library so it works fully offline;
+        # a vendored library would be fine too (see web-ui-conventions). The only
+        # network fetch is the basemap tiles, done by the viewing browser.
         return (
             _MAP_STYLE
             + '<p><a href="/plugins">&larr; Plugins</a></p>'
