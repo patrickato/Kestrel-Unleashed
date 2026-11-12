@@ -211,7 +211,10 @@ def next_auto_batch(aps, targets, attacks, recrack_on_new=True):
         if bssid:
             by_bssid.setdefault(bssid, target)
     for attack in attacks:
+        only = attack.get("only_bssid")       # a per-device attack: its AP only
         for bssid, target in by_bssid.items():
+            if only and only != bssid:
+                continue
             rec = aps.get(bssid)
             if rec is None or rec.get("password"):
                 continue

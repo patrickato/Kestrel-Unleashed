@@ -36,6 +36,7 @@ from . import john as john_mod
 from . import offload as offload_mod
 from . import progress as progress_mod
 from . import store as store_mod
+from . import suggest as suggest_mod
 from . import wordlists as wl_mod
 from .store import LootStore
 
@@ -352,6 +353,12 @@ class CrackWorker:
         if reuse is not None:
             attacks = [reuse] + attacks       # recovered passwords, tried first
         all_sigs = {a["sig"] for a in attacks}
+        # Per-device default-key masks: a device-appropriate sweep for the APs
+        # that plausibly ship a numeric default (printers/hotspots/gateways),
+        # each tagged to its own AP and appended last (the deepest tier). Kept out
+        # of all_sigs on purpose -- they apply to some APs only, so a camera must
+        # not need them to count as exhausted.
+        attacks = attacks + self._device_mask_attacks(targets)
         recrack = bool(conf.get("recrack_on_new_wordlist", True))
 
         state, did_work, current = "idle", False, None
@@ -523,6 +530,29 @@ class CrackWorker:
         if choice == "aircrack":
             return "aircrack"
         return "john" if john_mod.have_john() else "aircrack"
+
+    def _device_mask_attacks(self, targets):
+        """Per-AP default-key mask attacks for the auto loop, from
+        :func:`suggest.auto_masks` -- only for device types that plausibly ship a
+        numeric default, each tagged with ``only_bssid`` so it runs against that
+        AP alone. The engine still skips any mask it can't express, so this never
+        runs the wrong keyspace."""
+        out, seen = [], set()
+        for target in targets:
+            bssid = (target.get("bssid") or "").upper()
+            if not bssid:
+                continue
+            for mask in suggest_mod.auto_masks(essid=target.get("essid") or "",
+                                               bssid=bssid,
+                                               vendor=target.get("vendor") or ""):
+                key = (bssid, mask)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({"kind": "mask", "name": mask, "mask": mask,
+                            "sig": store_mod.mask_sig(mask), "only_bssid": bssid,
+                            "device": True})
+        return out
 
     def _crack_pass_john(self, aps, targets, attacks, conf, recrack):
         """One John pass over the ``.hc22000`` store: a queued manual job first,

@@ -195,6 +195,30 @@ def suggest(essid="", bssid="", vendor="", have_defaults=False):
             "caveat": "Blind fallback; a strong human-chosen key needs the wordlists."}
 
 
+# Device categories where a numeric default key is plausible, so the auto loop
+# may sweep the 8-digit default-key mask unprompted. Cameras/IoT (ship no default)
+# and unidentified APs are excluded; their one-tap suggestion still offers it.
+AUTO_MASK_CATEGORIES = frozenset({"printer", "hotspot", "router", "gateway"})
+
+
+def auto_masks(essid="", bssid="", vendor=""):
+    """Masks the **automatic** crack loop may run unprompted for this AP, tuned to
+    its device type: the on-device-practical default-key sweep (the 8-digit
+    numeric mask), and only for device classes that plausibly ship a numeric
+    default (printers, hotspots, ISP routers/gateways). Returns ``[]`` for
+    cameras/IoT (which ship no crackable WPA default), unidentified APs, and
+    model-matched gear whose real attack is a vendor keygen or a GPU-only mask --
+    all of those stay one-tap via :func:`suggest`. Deeper numeric masks (10/11
+    digit) and hex/custom masks are deliberately left out of the auto path: they
+    would take weeks per AP on the Pi's CPU, so they belong on the GPU offload."""
+    sug = suggest(essid=essid, bssid=bssid, vendor=vendor, have_defaults=False)
+    if sug.get("category") not in AUTO_MASK_CATEGORIES:
+        return []
+    return [a["value"] for a in sug.get("attacks", [])
+            if a.get("kind") == "mask" and a.get("runnable")
+            and a.get("value") == MASK_8_DIGIT]
+
+
 def render_text(sug, essid=""):
     """A plain-text block for the CLI: the headline, the ordered attacks with a
     ready `kestrel crack run` line for the runnable ones, and the caveat."""

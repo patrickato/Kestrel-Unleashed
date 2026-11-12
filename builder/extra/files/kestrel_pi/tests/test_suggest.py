@@ -49,3 +49,20 @@ def test_render_text_has_runnable_commands():
     text = suggest.render_text(s, essid="DIRECT-A2-HP")
     assert "kestrel crack run" in text and "--mask" in text
     assert "DIRECT-A2-HP" in text
+
+
+# --- auto_masks: the bounded per-device masks the auto loop runs unprompted ----
+def test_auto_masks_sweeps_8digit_for_numeric_default_devices():
+    # a plain printer and a generically-classified router/gateway (no vendor
+    # keygen pattern) get the 8-digit default-key sweep
+    assert suggest.auto_masks(essid="HP-Print-5A") == [suggest.MASK_8_DIGIT]
+    assert suggest.auto_masks(essid="Linksys00123") == [suggest.MASK_8_DIGIT]
+    assert suggest.auto_masks(essid="Spectrum-1234") == [suggest.MASK_8_DIGIT]
+
+
+def test_auto_masks_empty_for_cameras_unknowns_and_keygen_devices():
+    assert suggest.auto_masks(essid="ARLO_VMB_123") == []     # camera: no default
+    assert suggest.auto_masks(essid="some random ssid") == []  # unidentified
+    assert suggest.auto_masks(essid="NETGEAR42") == []        # keygen (word+3d), not 8-digit
+    assert suggest.auto_masks(essid="ATT4Ud3GXi") == []       # AT&T keygen, not 8-digit
+    assert suggest.auto_masks(essid="UPC1234567") == []       # custom charset, GPU/one-tap

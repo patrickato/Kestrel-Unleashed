@@ -539,6 +539,30 @@ up in `deferred.md` for the hardware/release pass, alongside a note to let John
 crack all APs in one multi-salt run. Tests: +13 (`test_john.py`, plus engine
 wiring/selection in `test_crack.py`); 1055 pass, lint clean.
 
+### Added: device-aware auto masks — per-network default-key sweep
+`[crack] masks` ships empty, so auto-crack ran no brute force at all — nothing
+swept the common all-numeric default keys unless the operator armed a global
+mask (which then blasts *every* network). Now the auto loop is device-aware: for
+each pending AP it asks `crack/suggest.auto_masks()` whether that device type
+plausibly ships a numeric default, and if so appends the 8-digit default-key
+mask **tagged to that AP alone** (deepest tier, after the wordlists).
+
+- Fires for printers, hotspots and ISP routers/gateways; returns nothing for
+  cameras/IoT (ship no crackable default), unidentified APs, and model-matched
+  gear whose real attack is a vendor keygen or a GPU-only hex/custom mask — all
+  of which stay one-tap via the Loot suggestion / `kestrel crack suggest`.
+- Only the on-device-practical 8-digit (`?d×8`) auto-runs; deeper numeric
+  (10/11-digit) and hex/custom masks would take weeks per AP on the Pi CPU, so
+  they're left to the GPU offload and the one-tap suggestion.
+- `next_auto_batch` honors an attack's `only_bssid` tag so a per-device mask runs
+  against its AP and no other; the tag is kept out of the global exhausted-set so
+  a camera never needs a mask it will never be offered.
+
+Touched: `crack/{suggest.py,store.py,controller.py}`, `config.toml`, user guide.
+Release impact: **app-layer-safe** (pure logic + the worker; no new deps/units).
+Tests: +4 (`auto_masks`, `only_bssid`, the per-device attack builder); 1059 pass,
+lint clean. On-device mask execution rides the hardware pass with the rest.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

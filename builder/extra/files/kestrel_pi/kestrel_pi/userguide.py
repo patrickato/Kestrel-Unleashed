@@ -316,6 +316,8 @@ Once a network yields a crackable handshake, capturing leaves it alone (one is e
 
 On-device cracking uses aircrack-ng by default. If a jumbo build of John the Ripper is present on the device, `[crack] engine` (default `auto`) switches to it: John reads the captured hashline store directly, so it cracks the stored backlog on the CPU — including PMKID-only captures, which aircrack-ng cannot — and applies rules. For a large backlog a desktop GPU is far faster: build a kit with `kestrel crack kit` (or set up `remote-crack`) and crack on your own machine.
 
+Auto-crack is also device-aware: on top of the wordlists, it automatically sweeps the 8-digit default-key mask against the networks whose device type plausibly ships a numeric default (printers, hotspots, ISP routers/gateways) and skips it on cameras, IoT and unidentified networks — so the likely wins get a default-key pass without brute-forcing every network. The per-network "best attack" suggestion on the Loot page (and `kestrel crack suggest`) still offers the deeper, vendor-specific attacks (keygens, model masks) one tap at a time.
+
 **"No handshake" on a row:** the cracker runs **aircrack-ng**, which needs a captured **4-way handshake (EAPOL)** to work. For an access point with no connected client, capture often gets only a **PMKID** — enough to identify the AP, but not something aircrack-ng can crack. Those rows show **"no handshake"** instead of an error, and the whole cracker stays healthy. Two ways to crack them anyway: have a client (a phone, a laptop) **connect or reconnect to that AP while capture is running** so the device records a full handshake, or **offload to a GPU** (next), which cracks the PMKID directly.
 
 ### Crack faster on a GPU (and crack PMKID)

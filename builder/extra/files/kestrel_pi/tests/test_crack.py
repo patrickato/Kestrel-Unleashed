@@ -246,6 +246,31 @@ def test_next_auto_batch_is_wordlist_first_one_ap_per_pass():
     assert store_mod.next_auto_batch(aps, targets, wls) is None
 
 
+def test_next_auto_batch_honors_only_bssid_device_mask():
+    # a per-device mask tagged only_bssid is offered to that AP alone
+    aps = {AP1C: {"tried": [], "password": ""}, AP2C: {"tried": [], "password": ""}}
+    targets = [{"bssid": AP1C}, {"bssid": AP2C}]
+    dev = {"kind": "mask", "name": "?d?d?d?d?d?d?d?d", "mask": "?d?d?d?d?d?d?d?d",
+           "sig": "mask:8d", "only_bssid": AP1C, "device": True}
+    attack, batch = store_mod.next_auto_batch(aps, targets, [dev])
+    assert attack is dev and [t["bssid"] for t in batch] == [AP1C]   # AP1 only
+    aps[AP1C]["tried"] = ["mask:8d"]
+    # AP1 done it; it is NOT offered to AP2 (tagged to AP1) -> nothing left
+    assert store_mod.next_auto_batch(aps, targets, [dev]) is None
+
+
+def test_device_mask_attacks_targets_only_numeric_default_devices(tmp_path):
+    cfg = _config(str(tmp_path), os.path.join(str(tmp_path), "wordlists"))
+    w = _worker(tmp_path, cfg, FakeAircrack())
+    targets = [{"bssid": AP1C, "essid": "HP-Print-5A"},     # printer -> 8-digit
+               {"bssid": AP2C, "essid": "ARLO_VMB_1"}]      # camera  -> none
+    attacks = w._device_mask_attacks(targets)
+    assert len(attacks) == 1
+    a = attacks[0]
+    assert a["only_bssid"] == AP1C and a["mask"] == "?d?d?d?d?d?d?d?d"
+    assert a["device"] is True
+
+
 # --- hashcat command + parse -----------------------------------------------
 
 def test_build_crack_cmd_clamps_and_prefixes():

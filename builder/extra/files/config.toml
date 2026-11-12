@@ -136,8 +136,12 @@ rules = []
 # tier). The way to catch an all-numeric router default a wordlist can't hold,
 # e.g. "?d?d?d?d?d?d?d?d" = every 8-digit key (~100M candidates ~ many hours on a
 # Pi CPU, per network). Empty by default so auto-crack never surprise-runs a
-# multi-hour brute force; add masks here to arm it, or run one deliberately on a
-# chosen target with `kestrel crack run <file> --mask "..."` or the /loot page.
+# multi-hour brute force on EVERY network; add masks here to arm it for all, or
+# run one deliberately with `kestrel crack run <file> --mask "..."` or /loot.
+# Independently of this list, auto-crack already runs the 8-digit default-key
+# sweep *per device* on APs that plausibly ship a numeric default (printers,
+# hotspots, ISP routers/gateways), skipping cameras/IoT/unknowns -- the likely
+# wins get swept without blasting every AP.
 # ?d digit  ?l lower  ?u upper  ?s symbol  ?a all.  See
 # docs/user-guide/wordlist-recommendations.md.
 masks = []
