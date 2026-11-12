@@ -513,16 +513,18 @@ def test_masks_run_after_wordlists(tmp_path):
     d = str(tmp_path)
     _write(os.path.join(d, "wordlists", "small.txt"), "nope\n")   # won't crack it
     _write(os.path.join(d, "capture", "nets.hc22000"), _hashline(AP1, "HomeWiFi") + "\n")
-    cfg = _config(d, os.path.join(d, "wordlists"), masks=["?d?d?d?d?d?d?d?d"])
-    fake = FakeAircrack(mask_cracks={AP1C: "12345678"})
+    # A 6-digit mask (1e6) is affordable on the Pi; the 8-digit sweep (1e8) now
+    # defers to the GPU offload tier, so use the affordable one to test ordering.
+    cfg = _config(d, os.path.join(d, "wordlists"), masks=["?d?d?d?d?d?d"])
+    fake = FakeAircrack(mask_cracks={AP1C: "123456"})
     worker = _worker(tmp_path, cfg, fake)
 
     worker.run_once()                       # wordlist pass first — no crack
     assert worker.loot.load()[AP1C]["status"] == "pending"   # mask still untried
     worker.run_once()                       # mask pass — cracks it
     rec = worker.loot.load()[AP1C]
-    assert rec["status"] == "cracked" and rec["password"] == "12345678"
-    assert rec["cracked_wordlist"] == "?d?d?d?d?d?d?d?d"
+    assert rec["status"] == "cracked" and rec["password"] == "123456"
+    assert rec["cracked_wordlist"] == "?d?d?d?d?d?d"
 
 
 def test_manual_mask_job(tmp_path):
@@ -604,3 +606,20 @@ def test_loot_store_is_owner_only(tmp_path):
     store.save({"AA:BB:CC:DD:EE:FF": {"essid": "home", "password": "s3cret"}})
     mode = stat_mod.S_IMODE(os.stat(store.path).st_mode)
     assert mode & 0o077 == 0, oct(mode)        # no group/other access at all
+
+
+def test_auto_loop_defers_expensive_masks_to_offload(tmp_path):
+    # The Pi can't grind the 8-digit sweep (1e8) in reasonable time, so the auto
+    # loop keeps the cheap mask on-device and defers the expensive one; status
+    # reports how many were handed to the GPU offload path.
+    import json
+    from kestrel_pi.crack import STATUS_NAME
+    wl = os.path.join(str(tmp_path), "wl")
+    _write(os.path.join(wl, "small.txt"), "password\n")
+    cfg = _config(tmp_path, wl, masks=["?d?d?d?d", "?d?d?d?d?d?d?d?d"])
+    worker = _worker(tmp_path, cfg, FakeAircrack({}), pcapng=False)
+    worker.run_once()
+    assert "?d?d?d?d?d?d?d?d" in worker._deferred_masks
+    assert "?d?d?d?d" not in worker._deferred_masks
+    with open(os.path.join(str(tmp_path), "crack", STATUS_NAME)) as fh:
+        assert json.load(fh)["deferred_offload"] == 1

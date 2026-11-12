@@ -37,6 +37,7 @@ from . import offload as offload_mod
 from . import progress as progress_mod
 from . import store as store_mod
 from . import suggest as suggest_mod
+from . import tiers as tiers_mod
 from . import wordlists as wl_mod
 from .store import LootStore
 
@@ -132,6 +133,9 @@ class CrackWorker:
         self._stream = stream
         self._py = "python3"         # interpreter for john's hccapx2john.py helper
         self._last_error = ""        # last hashcat failure, surfaced in status
+        # Masks too expensive for the Pi's CPU, deferred to the GPU offload path
+        # (surfaced in status so the operator knows to run the kit / remote-crack).
+        self._deferred_masks = []
         os.makedirs(crack_dir, exist_ok=True)
 
     # -- config -----------------------------------------------------------
@@ -348,7 +352,15 @@ class CrackWorker:
         wordlists = wl_mod.discover(conf.get("wordlists_dir"),
                                     conf.get("order", "size"))
         masks = [str(m).strip() for m in (conf.get("masks") or []) if str(m).strip()]
-        attacks = store_mod.build_attacks(wordlists, masks)
+        # Cost tiers: the Pi's CPU only grinds cheap keyspaces in reasonable time,
+        # so run affordable masks on-device and defer the expensive ones (the
+        # 8-digit default-key sweep etc.) to the GPU offload path instead of
+        # burning days per AP on a brute the CPU can't win. Reuse and wordlists
+        # (the high-yield tiers) always run on-device.
+        budget = int(conf.get("max_onpi_mask_keyspace",
+                              tiers_mod.DEFAULT_PI_MASK_KEYSPACE))
+        pi_masks, deferred = tiers_mod.split_masks(masks, budget)
+        attacks = store_mod.build_attacks(wordlists, pi_masks)
         reuse = self._reuse_attack(aps, conf)
         if reuse is not None:
             attacks = [reuse] + attacks       # recovered passwords, tried first
@@ -357,8 +369,14 @@ class CrackWorker:
         # that plausibly ship a numeric default (printers/hotspots/gateways),
         # each tagged to its own AP and appended last (the deepest tier). Kept out
         # of all_sigs on purpose -- they apply to some APs only, so a camera must
-        # not need them to count as exhausted.
-        attacks = attacks + self._device_mask_attacks(targets)
+        # not need them to count as exhausted. Affordable ones only; the rest
+        # defer to offload alongside the config masks above.
+        for attack in self._device_mask_attacks(targets):
+            if tiers_mod.affordable_on_pi(attack["mask"], budget):
+                attacks.append(attack)
+            else:
+                deferred.append(attack["mask"])
+        self._deferred_masks = sorted(set(deferred))
         recrack = bool(conf.get("recrack_on_new_wordlist", True))
 
         state, did_work, current = "idle", False, None
@@ -763,6 +781,7 @@ class CrackWorker:
             "no_handshake": counts["no_handshake"],
             "wordlists": len(wordlists),
             "masks": len(masks or []),
+            "deferred_offload": len(getattr(self, "_deferred_masks", [])),
             "queue": store_mod.queue_len(self.crack_dir),
             "temp_c": self._temp(),
             "current": current,
