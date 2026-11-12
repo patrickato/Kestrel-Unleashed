@@ -4,7 +4,7 @@
 
 # Kestrel-Unleashed
 
-> **A modified fork of [Kestrel](https://git.3ntropy.io/aluminum-ice/kestrel) by aluminum-ice**, released under the same license (GPL-3.0-or-later). This fork is tuned for authorized use in an isolated personal lab: capture is **enabled by default** with the authorized-use acknowledgment pre-satisfied for the operator's own networks, while the learning agent is **opt-in** — it ships off (it needs ~4 GB RAM and a model) and you enable it when you want it. See **[CHANGES-UNLEASHED.md](CHANGES-UNLEASHED.md)** for every change and **[NOTICE](NOTICE)** for attribution. This fork is independent and does not represent or speak for upstream Kestrel.
+> **A modified fork of [Kestrel](https://git.3ntropy.io/aluminum-ice/kestrel) by aluminum-ice**, released under the same license (GPL-3.0-or-later). This fork is tuned for authorized use in an isolated personal lab and ships **safe by default**: capture, on-device cracking, and the learning agent are all **off** until the operator turns them on. Enabling capture records the authorized-use acknowledgment, so a flashed image never touches the air until someone opts in on their own networks. (The agent also needs ~4 GB RAM and a model.) See **[CHANGES-UNLEASHED.md](CHANGES-UNLEASHED.md)** for every change and **[NOTICE](NOTICE)** for attribution. This fork is independent and does not represent or speak for upstream Kestrel.
 >
 > **Use only on networks you own or are explicitly authorized to test. Unauthorized use may be illegal.**
 

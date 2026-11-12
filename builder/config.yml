@@ -719,28 +719,13 @@
       group: pi
       mode: '0640'
 
-  # Kestrel-Unleashed: pre-seed the authorized-use acknowledgment so capture runs
-  # on first boot without the interactive prompt. This is a lab build for the
-  # operator's own / authorized networks; the mechanism is unchanged and still
-  # resettable (`kestrel capture reset-ack`). Upstream ships no ack file.
-  - name: "Kestrel-Unleashed: pre-seed the capture authorized-use acknowledgment"
-    copy:
-      dest: /etc/kestrel/capture-ack
-      content: "acknowledged at image build (Kestrel-Unleashed lab build)\n"
-      owner: root
-      group: root
-      mode: '0644'
+  # Capture ships OFF: no authorized-use acknowledgment is pre-seeded and the
+  # capture service is NOT enabled on boot, so a flashed image never captures
+  # until the operator turns it on (`kestrel capture enable` or the dashboard
+  # toggle), which records the acknowledgment and enables the service. This is
+  # the responsible default for a public, distributable image.
 
-  # Kestrel-Unleashed: enable the capture service so [capture] enabled = true in
-  # config.toml takes effect on boot. Upstream leaves it disabled until
-  # `kestrel capture enable`.
-  - name: "Kestrel-Unleashed: enable the capture service on boot"
-    systemd:
-      name: kestrel-capture.service
-      enabled: yes
-
-  # Enable the housekeeping timer (inert while action = off). (Kestrel-Unleashed
-  # enables the capture service itself, above, unlike upstream.)
+  # Enable the housekeeping timer (inert while capture is off).
   - name: enable the kestrel capture housekeeping timer
     systemd:
       name: kestrel-capture-housekeeping.timer
