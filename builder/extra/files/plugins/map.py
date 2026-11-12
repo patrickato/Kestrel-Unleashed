@@ -40,6 +40,41 @@ COLLECT_TTL_S = 20.0
 MIN_REFRESH_S = 2
 MAX_REFRESH_S = 60
 
+# The built-in street-tile basemaps the on-screen switcher cycles. Esri's tile
+# services serve browser/kiosk requests, unlike OpenStreetMap, whose tile policy
+# blocks embedded use and returns an "Access blocked" tile - so these just work
+# on the on-device display. Attribution follows the active basemap.
+_BASEMAPS = (
+    {"name": "Satellite",
+     "url": "https://server.arcgisonline.com/ArcGIS/rest/services/"
+            "World_Imagery/MapServer/tile/{z}/{y}/{x}",
+     "attrib": 'Imagery &copy; <a href="https://www.esri.com" target="_blank"'
+               ' rel="noopener">Esri</a>'},
+    {"name": "Street",
+     "url": "https://server.arcgisonline.com/ArcGIS/rest/services/"
+            "World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+     "attrib": '&copy; <a href="https://www.esri.com" target="_blank"'
+               ' rel="noopener">Esri</a>'},
+)
+
+
+def _resolve_basemaps(tile_url):
+    """The basemap list the on-screen switcher cycles, and the index to show by
+    default. A configured ``tile_url`` that matches a built-in just selects it as
+    the default; any other non-empty ``tile_url`` is appended as a "Custom"
+    basemap and becomes the default, so an operator's own tile server rides
+    alongside the built-ins, one tap away."""
+    maps = [dict(b) for b in _BASEMAPS]
+    default = 0
+    if tile_url:
+        match = next((i for i, b in enumerate(maps) if b["url"] == tile_url), None)
+        if match is not None:
+            default = match
+        else:
+            maps.append({"name": "Custom", "url": tile_url, "attrib": "Custom tiles"})
+            default = len(maps) - 1
+    return maps, default
+
 
 class Map(Plugin):
     __author__ = "kestrel"
@@ -56,19 +91,17 @@ class Map(Plugin):
     # recorded sidecars and track with no live fix at all.
     __optional_requires__ = ("position",)
     __options__ = {
-        # Progressive enhancement: let the viewing browser pull street tiles when
-        # it can reach the internet. Off = always the offline graticule view. The
-        # device itself never fetches tiles either way.
+        # Whether a street-tile basemap is shown by default (vs the offline grid).
+        # The on-map switcher cycles the built-in basemaps and the grid live; this
+        # is only the state the page opens in. The device itself never fetches
+        # tiles either way - whatever browser shows the page does.
         "tiles": {"type": "bool", "default": True},
-        # The tile source, as a {z}/{x}/{y} URL template (an optional {s} expands
-        # to a/b/c). The default is OpenStreetMap's canonical host, but OSM's
-        # tile policy blocks embedded/kiosk use and may serve an "Access blocked"
-        # tile; point this at your own tile server or a provider you are entitled
-        # to use (and update the attribution) when that happens, or turn tiles
-        # off for the offline grid. Not hardcoding the server is also what OSM's
-        # policy asks of apps.
-        "tile_url": {"type": "str",
-                     "default": "https://tile.openstreetmap.org/{z}/{x}/{y}.png"},
+        # An optional custom basemap, as a {z}/{x}/{y} URL template (an optional
+        # {s} expands to a/b/c). Left empty, the built-in Satellite/Street
+        # basemaps are used. Set it to your own tile server or a provider you are
+        # entitled to use (update the on-map attribution to match) and it is added
+        # to the switcher as "Custom" and shown by default.
+        "tile_url": {"type": "str", "default": ""},
         # Live poll cadence for the page, in seconds (clamped MIN..MAX).
         "refresh_seconds": {"type": "int", "default": 5},
         # Cap on how many of the most recent track points the route draws.
@@ -214,9 +247,9 @@ class Map(Plugin):
         return (body, 200, headers)
 
     def _render_page(self):
-        tiles_default = "true" if self.options.get("tiles", True) else "false"
-        tile_url = self.options.get(
-            "tile_url", "https://tile.openstreetmap.org/{z}/{x}/{y}.png")
+        tiles_on = bool(self.options.get("tiles", True))
+        basemaps, default_idx = _resolve_basemaps(self.options.get("tile_url", ""))
+        active = default_idx if tiles_on else -1   # -1 = start on the offline grid
         refresh_ms = str(self._refresh_seconds() * 1000)
         # The page is one self-contained document: a full-bleed canvas, a control
         # bar, a legend and a tooltip, with all behaviour in the inline script
@@ -229,8 +262,8 @@ class Map(Plugin):
             '<p class="muted" id="mapsummary">Loading the capture store&hellip;</p>'
             + _MAP_BODY
             + '<script>(function(){'
-            + 'var TILES_DEFAULT=' + tiles_default + ';'
-            + 'var TILE_URL=' + json.dumps(tile_url) + ';'
+            + 'var BASEMAPS=' + json.dumps(basemaps) + ';'
+            + 'var BASEMAP_DEFAULT=' + str(active) + ';'
             + 'var REFRESH_MS=' + refresh_ms + ';'
             + _MAP_SCRIPT
             + '})();</script>'
@@ -303,7 +336,7 @@ _MAP_BODY = (
     '<button data-k="heat" class="on">Heatmap</button>'
     '<button data-k="markers" class="on">Markers</button>'
     '<button data-k="route" class="on">Route</button>'
-    '<button data-k="tiles">Map tiles</button>'
+    '<button data-k="basemap">Map</button>'
     '<button data-k="recov">Recovered only</button>'
     '<a class="exp" href="export.kml" download>KML</a>'
     '<a class="exp" href="export.gpx" download>GPX</a>'
@@ -317,9 +350,7 @@ _MAP_BODY = (
     '<span class="sw" style="background:#00e3a0"></span>route'
     '</div>'
     '<div class="map-scale" id="mapscale">&nbsp;</div>'
-    '<div class="map-attrib" id="mapattrib" style="display:none">'
-    '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" '
-    'rel="noopener">OpenStreetMap</a></div>'
+    '<div class="map-attrib" id="mapattrib" style="display:none"></div>'
     '<div id="maptip"></div>'
     '<div class="map-empty" id="mapempty" style="display:none">'
     'No located networks yet. Capture with the GPS plugin enabled and a fix, '
@@ -342,7 +373,8 @@ var dpr=Math.max(1, Math.min(3, window.devicePixelRatio||1));
 var W=0, H=0;
 var view={lat:0, lon:0, z:16};           // center + fractional zoom
 var data={networks:[], track:[], position:null, bounds:null, stats:{}};
-var opt={heat:true, markers:true, route:true, tiles:TILES_DEFAULT, recov:false, follow:false};
+var opt={heat:true, markers:true, route:true, recov:false, follow:false};
+var basemap=BASEMAP_DEFAULT;    // index into BASEMAPS, or -1 for the offline grid
 var firstFit=true, tiles={}, heatCache=null, heatKey='';
 
 // --- Web-Mercator: lat/lon <-> world pixels at an integer zoom ---------
@@ -384,8 +416,8 @@ document.getElementById('mapctl').addEventListener('click', function(e){
   if(k==='fit'){ fit(); return; }
   if(k==='follow'){ opt.follow=!opt.follow; b.classList.toggle('on',opt.follow);
     if(opt.follow && data.position){ view.lat=data.position.lat; view.lon=data.position.lon; } draw(); return; }
+  if(k==='basemap'){ cycleBasemap(); return; }
   opt[k]=!opt[k]; b.classList.toggle('on',opt[k]);
-  if(k==='tiles'){ attribEl.style.display=opt.tiles?'block':'none'; }
   if(k==='heat'){ heatCache=null; }
   draw();
 });
@@ -393,9 +425,23 @@ document.querySelector('.map-zoom').addEventListener('click', function(e){
   var b=e.target.closest('button'); if(!b) return;
   zoomBy(parseInt(b.getAttribute('data-z'),10), W/2, H/2);
 });
-// reflect initial tile state on its button + attribution
-(function(){ var tb=document.querySelector('[data-k=tiles]');
-  if(opt.tiles){ tb.classList.add('on'); attribEl.style.display='block'; } })();
+// Basemap switcher: one tap cycles Satellite -> Street -> (Custom) -> Grid and
+// back, the control's label and the attribution following the active basemap.
+// A tap target only -- no keyboard needed, for the on-device kiosk.
+function basemapName(){ return basemap<0 ? 'Grid' : BASEMAPS[basemap].name; }
+function syncBasemapBtn(){
+  var b=document.querySelector('[data-k=basemap]');
+  b.textContent='Map: '+basemapName();
+  b.classList.toggle('on', basemap>=0);
+  if(basemap>=0){ attribEl.innerHTML=BASEMAPS[basemap].attrib; attribEl.style.display='block'; }
+  else { attribEl.style.display='none'; }
+}
+function cycleBasemap(){
+  basemap = basemap<0 ? 0 : (basemap+1>=BASEMAPS.length ? -1 : basemap+1);
+  tiles={};                 // a different source: drop cached tiles so they refetch
+  syncBasemapBtn(); draw();
+}
+syncBasemapBtn();
 
 // --- pointer pan/zoom (mouse + touch) ----------------------------------
 var ptrs={}, lastDist=0, moved=false;
@@ -467,7 +513,7 @@ function fit(){
 function draw(){
   ctx.clearRect(0,0,W,H);
   ctx.fillStyle='#0b0f14'; ctx.fillRect(0,0,W,H);
-  if(opt.tiles) drawTiles(); else drawGraticule();
+  if(basemap>=0) drawTiles(); else drawGraticule();
   if(opt.heat) drawHeat();
   if(opt.route) drawRoute();
   if(opt.markers) drawMarkers();
@@ -533,9 +579,11 @@ function tileImg(z,x,y){
   var img=new Image(); img.crossOrigin='anonymous';
   var sub=['a','b','c'][(x+y)%3];
   img.onload=function(){ draw(); }; img.onerror=function(){ tiles[key]=null; };
-  // Build the URL from the configured template ({s} optional). Any provider the
-  // operator is entitled to use works; the device never fetches - the browser does.
-  img.src=TILE_URL.replace('{s}',sub).replace('{z}',z).replace('{x}',x).replace('{y}',y);
+  // Build the URL from the active basemap's template ({s} optional). Any provider
+  // the operator is entitled to use works; the device never fetches - the browser
+  // does. Only called while a basemap is active (basemap >= 0).
+  var tpl=BASEMAPS[basemap].url;
+  img.src=tpl.replace('{s}',sub).replace('{z}',z).replace('{x}',x).replace('{y}',y);
   tiles[key]=img; return img;
 }
 

@@ -157,21 +157,42 @@ def test_view_renders_a_self_contained_page(tmp_path):
     body = page.body
     assert "mapcanvas" in body and "data.json" in body
     assert "REFRESH_MS=7000" in body
-    assert "TILES_DEFAULT=true" in body
-    # The tile source is injected as a JS string the renderer uses (default OSM).
-    assert 'TILE_URL="https://tile.openstreetmap.org/{z}/{x}/{y}.png"' in body
+    # The on-screen switcher's built-in basemaps are injected; it opens on the
+    # first (Satellite). OSM is not hardcoded (its policy blocks kiosk use).
+    assert '"name": "Satellite"' in body and '"name": "Street"' in body
+    assert "BASEMAP_DEFAULT=0" in body
+    assert "tile.openstreetmap.org" not in body
     # no external script/style tags -- everything inline (web-ui-conventions)
     assert "<script src=" not in body and "<link" not in body
 
 
-def test_tile_url_is_configurable_for_a_different_provider(tmp_path):
-    # OSM blocks embedded/kiosk use, so the operator can point the map at a tile
-    # source they are entitled to use; the template is injected verbatim and the
-    # hardcoded OSM host is gone from the fetch.
+def test_tiles_off_opens_on_the_offline_grid(tmp_path):
+    # tiles=false just picks the grid as the opening view; the switcher still
+    # offers the basemaps live (BASEMAP_DEFAULT=-1 == grid).
+    body = _plugin(tmp_path, {"tiles": False}).on_webhook("view", None).body
+    assert "BASEMAP_DEFAULT=-1" in body
+
+
+def test_custom_tile_url_is_added_as_a_basemap(tmp_path):
+    # OSM blocks embedded/kiosk use, so an operator can point the map at a source
+    # they are entitled to use; it joins the switcher as "Custom" and opens as the
+    # default. Nothing OSM is hardcoded in the page.
     url = "https://tiles.example.net/{z}/{x}/{y}.png"
     body = _plugin(tmp_path, {"tile_url": url}).on_webhook("view", None).body
-    assert 'TILE_URL="' + url + '"' in body
-    assert "a.tile.openstreetmap.org" not in body      # old hardcoded host is gone
+    assert url in body and '"name": "Custom"' in body
+    assert "BASEMAP_DEFAULT=2" in body          # Satellite, Street, then Custom
+    assert "tile.openstreetmap.org" not in body
+
+
+def test_resolve_basemaps_default_and_custom(tmp_path):
+    maps, idx = MAP._resolve_basemaps("")
+    assert [m["name"] for m in maps] == ["Satellite", "Street"] and idx == 0
+    # a tile_url equal to a built-in just selects it - no duplicate "Custom"
+    maps2, idx2 = MAP._resolve_basemaps(maps[0]["url"])
+    assert [m["name"] for m in maps2] == ["Satellite", "Street"] and idx2 == 0
+    # any other url is appended as Custom and becomes the default
+    maps3, idx3 = MAP._resolve_basemaps("https://x/{z}/{x}/{y}.png")
+    assert maps3[-1]["name"] == "Custom" and idx3 == len(maps3) - 1
 
 
 def test_unknown_subpath_redirects(tmp_path):
