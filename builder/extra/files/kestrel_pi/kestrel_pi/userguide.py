@@ -466,12 +466,15 @@ Turns everything `gps` records into a live map you open right in the dashboard �
 - your **route** as a green breadcrumb trail, so you can see exactly where you drove; and
 - a **live cursor** at your current position that moves with you (turn on **Follow** to keep it centred).
 
-It is built to work with **no internet at all** — in a shielded lab or out of coverage it draws a proper coordinate grid with a distance scale, so the map is never blank. When the browser you are viewing from *is* online, it quietly overlays real OpenStreetMap street tiles underneath your data (the **Map tiles** button toggles them). The Kestrel itself never reaches out — the tiles, if used, are fetched by your own phone or laptop, not the device — so nothing about where you have been leaves the device on its own. The map reads only; it drives nothing.
+It is built to work with **no internet at all** — in a shielded lab or out of coverage it draws a proper coordinate grid with a distance scale, so the map is never blank. When the browser you are viewing from *is* online, it can overlay real street tiles underneath your data (the **Map tiles** button toggles them). The Kestrel itself never reaches out — the tiles, if used, are fetched by whatever browser is showing the page, not the device — so nothing about where you have been leaves the device on its own. The map reads only; it drives nothing.
+
+A note on the street tiles: the default source is OpenStreetMap, but OSM's tile-usage policy blocks embedded/kiosk use, and when it does every tile comes back as an "Access blocked" graphic. If you see that, either turn **Map tiles** off and ride the offline grid, or point the map at a tile source you are entitled to use with the `tile_url` option (see below) — your own tile server, or a provider's `{z}/{x}/{y}` URL. On the on-device kiosk the Pi is the browser doing the fetching, so this matters most there.
 
 - Enable: `sudo kestrel plugins enable map` (local-only — no authorized-use acknowledgment).
 - A dashboard card summarises it at a glance: networks mapped, how many recovered, your route distance, and your live position.
 - **Export** your wardrive with the KML, GPX and CSV links on the map (or fetch them directly over the management link, e.g. `curl -o drive.kml http://<device>/plugins/map/export.kml`). KML opens in Google Earth, GPX carries your route into any GPS app, and the CSV is the standard WiGLE wardriving format — so your captures are never locked inside the device.
-- Option `tiles` (default `true`): allow the viewing browser to pull OpenStreetMap street tiles when online. Set `false` to always use the offline grid — for a shielded lab, or simply to send no coordinates to a tile server.
+- Option `tiles` (default `true`): allow the viewing browser to pull street tiles when online. Set `false` to always use the offline grid — for a shielded lab, or simply to send no coordinates to a tile server.
+- Option `tile_url` (default OpenStreetMap's canonical host): the tile source as a `{z}/{x}/{y}` URL template (an optional `{s}` expands to `a`/`b`/`c`). Point it at your own tile server or a provider you are entitled to use if OSM blocks the default; update the on-map attribution to match whatever you use.
 - Option `refresh_seconds` (default `5`, clamped 2–60): how often the open map polls for new captures and your latest position.
 - Option `max_track_points` (default `20000`): the most recent route points the map draws; the device keeps the breadcrumb trimmed so a long drive never grows it without bound.
 

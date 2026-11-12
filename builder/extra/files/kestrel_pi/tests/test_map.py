@@ -158,8 +158,20 @@ def test_view_renders_a_self_contained_page(tmp_path):
     assert "mapcanvas" in body and "data.json" in body
     assert "REFRESH_MS=7000" in body
     assert "TILES_DEFAULT=true" in body
+    # The tile source is injected as a JS string the renderer uses (default OSM).
+    assert 'TILE_URL="https://tile.openstreetmap.org/{z}/{x}/{y}.png"' in body
     # no external script/style tags -- everything inline (web-ui-conventions)
     assert "<script src=" not in body and "<link" not in body
+
+
+def test_tile_url_is_configurable_for_a_different_provider(tmp_path):
+    # OSM blocks embedded/kiosk use, so the operator can point the map at a tile
+    # source they are entitled to use; the template is injected verbatim and the
+    # hardcoded OSM host is gone from the fetch.
+    url = "https://tiles.example.net/{z}/{x}/{y}.png"
+    body = _plugin(tmp_path, {"tile_url": url}).on_webhook("view", None).body
+    assert 'TILE_URL="' + url + '"' in body
+    assert "a.tile.openstreetmap.org" not in body      # old hardcoded host is gone
 
 
 def test_unknown_subpath_redirects(tmp_path):

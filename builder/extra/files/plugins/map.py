@@ -56,10 +56,19 @@ class Map(Plugin):
     # recorded sidecars and track with no live fix at all.
     __optional_requires__ = ("position",)
     __options__ = {
-        # Progressive enhancement: let the viewing browser pull OSM tiles when it
-        # can reach the internet. Off = always the offline graticule view. The
+        # Progressive enhancement: let the viewing browser pull street tiles when
+        # it can reach the internet. Off = always the offline graticule view. The
         # device itself never fetches tiles either way.
         "tiles": {"type": "bool", "default": True},
+        # The tile source, as a {z}/{x}/{y} URL template (an optional {s} expands
+        # to a/b/c). The default is OpenStreetMap's canonical host, but OSM's
+        # tile policy blocks embedded/kiosk use and may serve an "Access blocked"
+        # tile; point this at your own tile server or a provider you are entitled
+        # to use (and update the attribution) when that happens, or turn tiles
+        # off for the offline grid. Not hardcoding the server is also what OSM's
+        # policy asks of apps.
+        "tile_url": {"type": "str",
+                     "default": "https://tile.openstreetmap.org/{z}/{x}/{y}.png"},
         # Live poll cadence for the page, in seconds (clamped MIN..MAX).
         "refresh_seconds": {"type": "int", "default": 5},
         # Cap on how many of the most recent track points the route draws.
@@ -206,6 +215,8 @@ class Map(Plugin):
 
     def _render_page(self):
         tiles_default = "true" if self.options.get("tiles", True) else "false"
+        tile_url = self.options.get(
+            "tile_url", "https://tile.openstreetmap.org/{z}/{x}/{y}.png")
         refresh_ms = str(self._refresh_seconds() * 1000)
         # The page is one self-contained document: a full-bleed canvas, a control
         # bar, a legend and a tooltip, with all behaviour in the inline script
@@ -219,6 +230,7 @@ class Map(Plugin):
             + _MAP_BODY
             + '<script>(function(){'
             + 'var TILES_DEFAULT=' + tiles_default + ';'
+            + 'var TILE_URL=' + json.dumps(tile_url) + ';'
             + 'var REFRESH_MS=' + refresh_ms + ';'
             + _MAP_SCRIPT
             + '})();</script>'
@@ -521,7 +533,9 @@ function tileImg(z,x,y){
   var img=new Image(); img.crossOrigin='anonymous';
   var sub=['a','b','c'][(x+y)%3];
   img.onload=function(){ draw(); }; img.onerror=function(){ tiles[key]=null; };
-  img.src='https://'+sub+'.tile.openstreetmap.org/'+z+'/'+x+'/'+y+'.png';
+  // Build the URL from the configured template ({s} optional). Any provider the
+  // operator is entitled to use works; the device never fetches - the browser does.
+  img.src=TILE_URL.replace('{s}',sub).replace('{z}',z).replace('{x}',x).replace('{y}',y);
   tiles[key]=img; return img;
 }
 
