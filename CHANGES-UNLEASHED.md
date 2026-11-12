@@ -563,6 +563,25 @@ Release impact: **app-layer-safe** (pure logic + the worker; no new deps/units).
 Tests: +4 (`auto_masks`, `only_bssid`, the per-device attack builder); 1059 pass,
 lint clean. On-device mask execution rides the hardware pass with the rest.
 
+### Fixed: kiosk strands on a chromium error page; now self-heals
+`kiosk-launch.sh` ran `exec cage chromium` once with no wait and no retry, so if
+the dashboard wasn't answering when chromium loaded -- a boot race (the launcher
+starts `After=` the daemon *unit*, but its web port binds a moment later) or a
+momentary daemon drop (e.g. a USB brown-out from hot-plugging a hub) -- chromium
+parked on `ERR_CONNECTION_REFUSED` forever, with no way back on a touchscreen.
+
+The launcher is now a self-healing supervisor: it waits for the dashboard to
+answer before starting the browser, and a watchdog relaunches the browser if the
+dashboard goes unreachable past `[kiosk] reload_after_seconds` (default 15; 0
+disables). Reachability is a dependency-free bash `/dev/tcp` probe of the url's
+host:port (no curl), and a `TERM`/`INT` trap tears cage down cleanly on
+`systemctl stop`.
+
+Touched: `kiosk-launch.sh`, `config.toml` (new `reload_after_seconds`), changelog.
+Release impact: **app-layer-safe** (`kiosk-launch.sh` is in the engine's
+`LIB_SCRIPTS`; the new config key falls back to the code default on existing
+devices). Lint clean; shell-only, so covered by shellcheck + `bash -n`.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

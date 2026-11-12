@@ -302,6 +302,11 @@ enabled = false
 url = "http://127.0.0.1:8080/"
 # Extra chromium flags, one string per entry (e.g. "--force-dark-mode").
 extra_args = []
+# Self-heal: if the dashboard is unreachable this many seconds (a daemon restart,
+# a boot race), the kiosk relaunches the browser instead of stranding the screen
+# on a "connection refused" page. It also waits for the dashboard before starting.
+# 0 disables the watchdog.
+reload_after_seconds = 15
 # If the screen is mounted sideways, rotate it the standard Pi way in
 # /boot/firmware/config.txt (e.g. `display_hdmi_rotate=2` for 180 deg), not here.
 # See docs/user-guide/kiosk-setup.md.
