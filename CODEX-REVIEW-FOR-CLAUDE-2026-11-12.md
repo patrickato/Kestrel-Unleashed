@@ -126,3 +126,34 @@ Suggested first product feature: unified network detail backed by a session-awar
 - What concrete evidence would count as each workflow being complete?
 
 Please discuss these choices with the owner. This note itself authorizes no implementation changes.
+
+## Follow-up: capability priorities from the owner discussion
+
+The owner requested that the subsequent recommendations also be retained here. The table above already covers these ideas; this addendum records the explicit priority order and integration expectations from that follow-up. These remain discussion proposals.
+
+### Highest-priority additions for the existing workflows
+
+1. **Capture quality inspector:** explain what each artifact contains, structural validity, missing prerequisites, and compatibility with installed analysis tools. Make it immediately clear whether collected material is useful and why.
+2. **Offline packet-analysis workspace:** import captures, inspect authentication timelines and protocol summaries, search observations, and annotate evidence from the dashboard without requiring a live radio.
+3. **Radio ownership manager:** show which component owns each adapter, prevent conflicting operations, and restore interface state after completion or failure.
+
+These priorities specifically strengthen the existing capture/analysis/operator workflow. They complement the earlier recommendation for unified network detail and a session-aware data model.
+
+### Next expansion in assessment coverage
+
+- **Enterprise Wi-Fi assessment:** go beyond home-network PSKs with enterprise authentication inventory, observable EAP interpretation, and records of controlled client certificate-validation tests.
+- **Optional wired-network assessment:** host/service inventory and expected-versus-observed segmentation checks on operator-selected lab networks.
+
+### Other ideas to keep in the discussion
+
+- Wi-Fi security posture summaries for encryption, WPA2/WPA3, PMF, WPS exposure, and changes between visits.
+- Rogue AP and impersonation detection against a known baseline, accounting for legitimate mesh and roaming behavior.
+- BLE advertisement inventory and change tracking, with randomized-address and management-link coexistence limitations.
+- Repeatable lab scenarios with prerequisites, expected evidence, cleanup checks, and recorded results.
+- Findings and retest tracking: observations, evidence, confirmation, remediation, and comparison at a later assessment.
+
+### What an integrated optional module should provide
+
+Each module should have dashboard controls, dependency and hardware checks, shared evidence storage, clear running/completed/failed status, and verified cleanup. Record its resource requirements and supported image/hardware combinations. Installing a command-line tool alone does not complete the feature.
+
+The goal is to make each addition a complete usable workflow while keeping optional capabilities separately installable and maintainable. No implementation has been authorized by this note or addendum.
