@@ -582,6 +582,25 @@ Release impact: **app-layer-safe** (`kiosk-launch.sh` is in the engine's
 `LIB_SCRIPTS`; the new config key falls back to the code default on existing
 devices). Lint clean; shell-only, so covered by shellcheck + `bash -n`.
 
+### Fixed: dashboard readouts refreshed only once a minute (GPS looked frozen)
+The daemon fired `on_ui_update` (the dashboard refresh) on the **same loop** as
+`on_epoch` (the decision tick), so every plugin card -- GPS fix, signal, sats,
+the map cursor -- only updated every `epoch_seconds` (default **60s**). On a
+live GPS/wardriving device that made the readout feel broken: move the antenna,
+wait a minute to see any change.
+
+Split them. A new `_ui_loop` dispatches `on_ui_update` every `[daemon]
+ui_refresh_seconds` (default **5s**), decoupled from the 60s decision epoch; the
+dashboard page's own auto-reload default dropped 30→10s to match (the map page
+was already fast). `_tick_epoch` now drives only `on_epoch`.
+
+Touched: `daemon.py` (`_tick_epoch` split + `_tick_ui`/`_ui_loop`), `config.py`
+(`ui_refresh_seconds`), `config.toml`, `config_catalog.py`, changelog. Release
+impact: **app-layer-safe** -- existing devices pick up the 5s data refresh from
+the code default on an in-place update (operator config is skipped); lower
+`[web] refresh_seconds` on the device for a fully live screen. Tests: +1; 1060
+pass, lint clean.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

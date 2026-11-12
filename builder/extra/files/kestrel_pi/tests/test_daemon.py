@@ -44,6 +44,29 @@ def test_start_populates_ui_immediately(tmp_path, monkeypatch):
     assert hooks.index("on_ui_setup") < hooks.index("on_ui_update")
 
 
+def test_ui_refresh_is_decoupled_from_the_epoch(tmp_path, monkeypatch):
+    # The decision epoch (on_epoch) and the dashboard refresh (on_ui_update) run
+    # on separate cadences now, so live data -- the GPS fix/signal/map cursor --
+    # updates every few seconds instead of being stuck at epoch_seconds.
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("[web]\nenabled = false\n")
+    d = daemon_mod.Daemon(config_path=str(cfg), capture_store=str(tmp_path))
+    rec = types.SimpleNamespace(name="gps")
+    monkeypatch.setattr(d.loader, "loaded_records", lambda: [rec])
+    monkeypatch.setattr(d, "_epoch_info", lambda: {})
+    monkeypatch.setattr(d, "_ui_state", lambda: object())
+
+    d.dispatcher = _RecDispatcher()
+    d._tick_epoch()
+    epoch_hooks = [h for (_n, h) in d.dispatcher.calls]
+    assert "on_epoch" in epoch_hooks
+    assert "on_ui_update" not in epoch_hooks          # no longer chained to the epoch
+
+    d.dispatcher = _RecDispatcher()
+    d._tick_ui()
+    assert [h for (_n, h) in d.dispatcher.calls] == ["on_ui_update"]
+
+
 def test_agent_and_capture_state_reflect_runtime_config_changes(tmp_path):
     """Enabling the agent (or setting its policy, or toggling capture) rewrites
     config.toml through the root apply helper without restarting the daemon.

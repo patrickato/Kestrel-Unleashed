@@ -359,9 +359,16 @@ class Daemon:
     def _tick_epoch(self):
         self.epoch += 1
         info = self._epoch_info()
-        state = self._ui_state()
         for record in self.loader.loaded_records():
             self.dispatcher.dispatch(record, "on_epoch", self.epoch, info)
+
+    def _tick_ui(self):
+        """Refresh every plugin's dashboard readout (on_ui_update). Runs on its
+        own fast cadence (ui_refresh_seconds), NOT the decision epoch, so live
+        data -- the GPS fix, signal, the map cursor -- updates in seconds instead
+        of being stuck at epoch_seconds (up to a minute)."""
+        state = self._ui_state()
+        for record in self.loader.loaded_records():
             self.dispatcher.dispatch(record, "on_ui_update",
                                      self.ui.for_plugin(record.name), state)
 
@@ -395,6 +402,7 @@ class Daemon:
         self._spawn(self._capture_loop, "pwn-capture")
         self._spawn(self._connectivity_loop, "pwn-connectivity")
         self._spawn(self._epoch_loop, "pwn-epoch")
+        self._spawn(self._ui_loop, "pwn-ui")
 
     def _start_web(self):
         try:
@@ -457,6 +465,16 @@ class Daemon:
                 self._tick_epoch()
             except Exception:  # noqa: BLE001
                 self.log.exception("epoch tick failed")
+
+    def _ui_loop(self):
+        interval = max(1, int(self.daemon_cfg.get("ui_refresh_seconds", 5)))
+        while not self._stop.is_set():
+            if self._stop.wait(interval):
+                break
+            try:
+                self._tick_ui()
+            except Exception:  # noqa: BLE001
+                self.log.exception("ui tick failed")
 
     def stop(self):
         self.log.info("daemon stopping")

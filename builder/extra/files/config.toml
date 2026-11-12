@@ -243,7 +243,10 @@ idle_penalty = 0.05         # dwelling on a channel with no discoverable APs
 # `kestrel plugins list|enable|disable|info` rather than hand-editing.
 [daemon]
 enabled = true              # the plugin host / event loop
-epoch_seconds = 60          # on_epoch cadence
+epoch_seconds = 60          # on_epoch (decision) cadence
+ui_refresh_seconds = 5      # how often dashboard readouts refresh (on_ui_update),
+                            # decoupled from the epoch so live data (GPS fix,
+                            # signal, map cursor) updates in seconds, not minutes
 max_hook_seconds = 30       # soft deadline: a hook overrunning this is logged
                             # (slow is fine; a hook that finishes is never punished)
 hook_workers = 4            # size of the off-loop dispatch worker pool
@@ -260,9 +263,11 @@ bind = "management"         # management = eth0/bnep0/wlan0/loopback; never the 
 port = 8080
 # How often the dashboard reloads itself to show fresh device state, in seconds.
 # 0 disables the auto-refresh. Only the read-only dashboard refreshes; settings
-# and confirmation forms never reload under you. Device data updates at most each
-# epoch (epoch_seconds), so a value below that just re-renders the same numbers.
-refresh_seconds = 30
+# and confirmation forms never reload under you. Readouts refresh every
+# [daemon] ui_refresh_seconds, so set this near that for a live screen (the map
+# page polls faster on its own). 10s suits a live GPS screen; raise it to spare a
+# low-power panel.
+refresh_seconds = 10
 auth = "system"             # system | basic | token | none
 # system (default): log in with the device account (same username/password you
 #   SSH in with); the web login can never drift from the SSH login because it is

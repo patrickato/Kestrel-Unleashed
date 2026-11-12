@@ -256,9 +256,10 @@ SECTIONS = [
             _ro("web", "port", RO_LOCKOUT,
                 "Changing the port drops your session and needs a restart — use "
                 "the CLI.", cli=""),
-            _edit("web", "refresh_seconds", "int", 30,
-                  "Dashboard auto-refresh in seconds (0 = off). Below "
-                  "epoch_seconds just re-renders the same numbers.",
+            _edit("web", "refresh_seconds", "int", 10,
+                  "Dashboard auto-refresh in seconds (0 = off). Readouts refresh "
+                  "every [daemon] ui_refresh_seconds; set this near that for a "
+                  "live screen.",
                   RESTART_DAEMON, min=0),
             _ro("web", "auth", RO_LOCKOUT,
                 "The login mode. Use 'sudo kestrel web auth <mode>' — a "

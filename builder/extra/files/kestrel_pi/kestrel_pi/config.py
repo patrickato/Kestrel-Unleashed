@@ -16,6 +16,10 @@ DEFAULT_CONFIG_PATH = "/etc/kestrel/config.toml"
 DAEMON_DEFAULTS = {
     "enabled": True,
     "epoch_seconds": 60,
+    # How often the daemon refreshes the dashboard readouts (on_ui_update),
+    # decoupled from the decision epoch so live data -- the GPS fix, signal and
+    # the map cursor -- updates in seconds, not at epoch_seconds. A few seconds.
+    "ui_refresh_seconds": 5,
     "max_hook_seconds": 30,
     "hook_workers": 4,
     # A hook still running this many seconds after it started has stopped
