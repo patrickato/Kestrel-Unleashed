@@ -29,6 +29,7 @@ import json
 import os
 import select
 import socket
+import termios
 import threading
 import time
 
@@ -84,6 +85,59 @@ def _haversine_m(lat1, lon1, lat2, lon2):
     a = (math.sin(dp / 2) ** 2
          + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2)
     return 2 * radius * math.asin(min(1.0, math.sqrt(a)))
+
+
+def _serial_attrs(attrs, baud):
+    """Transform a ``termios`` attribute list into raw 8N1 at ``baud``.
+
+    Pure (no I/O) so it is unit-testable off a device. Clears input/output/line
+    processing so NMEA bytes arrive verbatim, forces 8 data bits / no parity /
+    one stop bit with the receiver enabled and modem lines ignored, and sets the
+    line speed. The speed is written into both ``c_cflag`` (the ``CBAUD`` bits,
+    which classic ``tcsetattr`` actually honours on Linux) and the ispeed/ospeed
+    slots. An unknown rate (no ``B<baud>`` constant) leaves the speed untouched."""
+    iflag, oflag, cflag, lflag, ispeed, ospeed, cc = attrs
+    iflag &= ~(termios.IGNBRK | termios.BRKINT | termios.PARMRK | termios.ISTRIP
+               | termios.INLCR | termios.IGNCR | termios.ICRNL
+               | termios.IXON | termios.IXOFF | termios.IXANY)
+    oflag &= ~termios.OPOST
+    lflag &= ~(termios.ECHO | termios.ECHOE | termios.ECHONL
+               | termios.ICANON | termios.ISIG | termios.IEXTEN)
+    cflag &= ~(termios.CSIZE | termios.PARENB | termios.CSTOPB
+               | getattr(termios, "CRTSCTS", 0))
+    cflag |= termios.CS8 | termios.CREAD | termios.CLOCAL
+    speed = getattr(termios, "B%d" % int(baud), None)
+    if speed is not None:
+        cbaud = getattr(termios, "CBAUD", 0o010017)
+        cflag = (cflag & ~cbaud) | speed
+        ispeed = ospeed = speed
+    cc = list(cc)
+    cc[termios.VMIN] = 0
+    cc[termios.VTIME] = 0
+    return [iflag, oflag, cflag, lflag, ispeed, ospeed, cc]
+
+
+def _configure_serial(fd, baud, log=None):
+    """Put the serial line behind ``fd`` into raw 8N1 at ``baud``. Returns True
+    when applied, False when ``fd`` is not a real tty.
+
+    A USB CDC-ACM puck (the bare u-blox on ``/dev/ttyACM*``) ignores line speed,
+    so this is effectively a no-op there; a USB-serial-bridge puck (many G-MOUSE
+    units on ``/dev/ttyUSB*``, a real UART) returns only noise until its baud is
+    set to match the receiver -- usually 9600. Best-effort: anything that is not
+    a tty (a pipe in tests, an odd node) raises on ``tcgetattr`` and is left as a
+    plain byte stream, preserving the CDC-ACM path exactly as before."""
+    try:
+        attrs = termios.tcgetattr(fd)
+    except (termios.error, OSError):
+        return False
+    try:
+        termios.tcsetattr(fd, termios.TCSANOW, _serial_attrs(attrs, baud))
+    except (termios.error, OSError) as exc:
+        if log:
+            log.debug("could not set serial line to %s baud: %s", baud, exc)
+        return False
+    return True
 
 
 class GPS(Plugin):
@@ -525,6 +579,13 @@ class GPS(Plugin):
         # in normal use and the cold-start clock is uninterrupted.
         with open(device, "rb", buffering=0) as port:
             fd = port.fileno()
+            # Apply the configured baud in raw mode. Harmless on a USB CDC-ACM
+            # puck (ttyACM, which ignores line speed), but essential on a
+            # USB-serial-bridge puck (ttyUSB, a real UART): without it the line
+            # sits at whatever baud it was left at and the receiver reads as
+            # silence or garbage. Best-effort - a non-tty node just reads raw.
+            _configure_serial(fd, int(self.options.get("baud", 9600)),
+                              getattr(self, "log", None))
             buf = b""
             while not self._stop.is_set():
                 ready, _, _ = select.select([fd], [], [], 20)

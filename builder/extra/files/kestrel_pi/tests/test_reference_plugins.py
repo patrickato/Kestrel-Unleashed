@@ -815,6 +815,71 @@ def test_gps_any_sentence_marks_the_receiver_alive(tmp_path):
     assert plugin._last_rx is not None
 
 
+def test_gps_serial_attrs_force_raw_8n1_at_the_configured_baud(tmp_path):
+    # The serial reader must drive a real UART (a USB-serial-bridge puck such as
+    # many G-MOUSE units on /dev/ttyUSB*) at the receiver's baud in raw mode;
+    # left in cooked mode or at the wrong speed it reads only noise. (A USB
+    # CDC-ACM puck like the bare u-blox ignores line speed, so this is a no-op
+    # there.) _serial_attrs is the pure transform, checked here without hardware.
+    import termios
+    mod = _load_module("gps.py", "gps_serial_attrs_under_test")
+    # A deliberately "cooked" starting line: canonical mode, echo, parity, CR/NL
+    # translation and a stale 4800 baud - everything the transform must undo.
+    iflag = termios.ICRNL | termios.IXON | termios.ISTRIP
+    oflag = termios.OPOST
+    cflag = termios.PARENB | termios.CSTOPB | termios.CS7 | termios.B4800
+    lflag = termios.ICANON | termios.ECHO | termios.ISIG
+    out = mod._serial_attrs([iflag, oflag, cflag, lflag, 0, 0, [0] * 32], 9600)
+    o_iflag, o_oflag, o_cflag, o_lflag, o_ispeed, o_ospeed, o_cc = out
+    # Raw: no input/output/line processing survives.
+    assert o_iflag & (termios.ICRNL | termios.IXON | termios.ISTRIP) == 0
+    assert o_oflag & termios.OPOST == 0
+    assert o_lflag & (termios.ICANON | termios.ECHO | termios.ISIG) == 0
+    # 8N1 with the receiver enabled and modem lines ignored.
+    assert o_cflag & termios.CSIZE == termios.CS8
+    assert o_cflag & termios.PARENB == 0
+    assert o_cflag & termios.CSTOPB == 0
+    assert o_cflag & (termios.CREAD | termios.CLOCAL) == (termios.CREAD | termios.CLOCAL)
+    # Baud set to 9600 in both the CBAUD bits and the ispeed/ospeed slots.
+    cbaud = getattr(termios, "CBAUD", 0o010017)
+    assert o_cflag & cbaud == termios.B9600
+    assert o_ispeed == termios.B9600 and o_ospeed == termios.B9600
+    # Non-blocking byte reads (select() upstream gates liveness).
+    assert o_cc[termios.VMIN] == 0 and o_cc[termios.VTIME] == 0
+    # An unknown rate leaves the speed bits untouched rather than guessing one.
+    keep = mod._serial_attrs([0, 0, termios.B4800, 0, 0, 0, [0] * 32], 123457)
+    assert keep[2] & cbaud == termios.B4800
+
+
+def test_gps_configure_serial_is_a_noop_on_a_non_tty(tmp_path):
+    # Best-effort: a node with no tty semantics (a pipe here, standing in for an
+    # odd device) raises on tcgetattr and the reader falls back to a plain byte
+    # stream - no exception, exactly the pre-fix behaviour the CDC-ACM path used.
+    mod = _load_module("gps.py", "gps_configure_serial_pipe_under_test")
+    r, w = os.pipe()
+    try:
+        assert mod._configure_serial(r, 9600) is False
+    finally:
+        os.close(r)
+        os.close(w)
+
+
+def test_gps_configure_serial_applies_to_a_real_tty(tmp_path):
+    # On an actual tty (a pty stands in for the UART) the config is applied and a
+    # read-back confirms raw mode - exercising the fd path, not just the transform.
+    import termios
+    mod = _load_module("gps.py", "gps_configure_serial_pty_under_test")
+    primary, replica = os.openpty()
+    try:
+        assert mod._configure_serial(replica, 9600) is True
+        attrs = termios.tcgetattr(replica)
+        assert attrs[3] & termios.ICANON == 0        # cooked mode cleared
+        assert attrs[2] & termios.CSIZE == termios.CS8
+    finally:
+        os.close(primary)
+        os.close(replica)
+
+
 def test_gps_publishes_latest_fix_seam(tmp_path, monkeypatch):
     # Phase 4.8: a new fix writes the agent seam file atomically with the full
     # schema (ts/lat/lon/alt/fix/sats/hdop/cn0).
