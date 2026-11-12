@@ -28,6 +28,7 @@ from __future__ import annotations
 import os
 
 from ..capture import parse_hashline
+from . import suggest as suggest_mod
 from .hashcat import parse_show
 from .store import LootStore
 
@@ -37,6 +38,7 @@ from .store import LootStore
 RECOVERED_NAME = "offload-recovered.txt"
 # What a built kit is named, and the file the GPU box produces for the trip back.
 KIT_TARGETS = "targets.hc22000"
+KIT_MASKS = "masks.hcmask"          # the deferred device default-key masks for -a 3
 KIT_RECOVERED = "recovered.txt"
 
 
@@ -167,18 +169,43 @@ def uncracked_hashlines(hashline_files, aps, read_events):
     return out
 
 
+def kit_masks(aps):
+    """Device-appropriate default-key masks for the still-uncracked APs: the ones
+    the Pi defers as too slow for its CPU (the 8-digit sweep etc.), so the GPU
+    kit runs them where they finish in minutes. Dedup, order preserved. This is
+    the mask half of the escalation -- the Pi hands the expensive masks here."""
+    masks = []
+    for bssid, rec in (aps or {}).items():
+        if not isinstance(rec, dict) or rec.get("password"):
+            continue
+        for mask in suggest_mod.auto_masks(essid=rec.get("essid") or "",
+                                           bssid=bssid,
+                                           vendor=rec.get("vendor") or ""):
+            if mask not in masks:
+                masks.append(mask)
+    return masks
+
+
 def build_kit(out_dir, hashline_files, aps, read_events):
     """Write a GPU crack kit into ``out_dir``: ``targets.hc22000`` (the uncracked
-    hashlines), ``crack.bat`` + ``crack.sh`` (run hashcat and emit
-    ``recovered.txt``) and ``README.txt``. Returns
-    ``{"dir", "targets", "files"}``; ``targets`` is 0 when nothing is left to
-    crack (the kit is still written, with an empty target file and a note)."""
+    hashlines), ``masks.hcmask`` (the device default-key masks the Pi deferred,
+    when any), ``crack.bat`` + ``crack.sh`` (run hashcat over the wordlist then
+    the masks and emit ``recovered.txt``) and ``README.txt``. Returns
+    ``{"dir", "targets", "masks", "files"}``; ``targets`` is 0 when nothing is
+    left to crack (the kit is still written, with an empty target file and a
+    note)."""
     os.makedirs(out_dir, exist_ok=True)
     lines = uncracked_hashlines(hashline_files, aps, read_events)
     targets_path = os.path.join(out_dir, KIT_TARGETS)
     with open(targets_path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + ("\n" if lines else ""))
     files = {KIT_TARGETS: targets_path}
+    masks = kit_masks(aps)
+    if masks:
+        masks_path = os.path.join(out_dir, KIT_MASKS)
+        with open(masks_path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(masks) + "\n")
+        files[KIT_MASKS] = masks_path
     for name, body in (("crack.bat", _CRACK_BAT), ("crack.sh", _CRACK_SH),
                        ("README.txt", _README)):
         p = os.path.join(out_dir, name)
@@ -190,7 +217,8 @@ def build_kit(out_dir, hashline_files, aps, read_events):
             except OSError:
                 pass
         files[name] = p
-    return {"dir": out_dir, "targets": len(lines), "files": files}
+    return {"dir": out_dir, "targets": len(lines), "masks": len(masks),
+            "files": files}
 
 
 # -- the files written into a kit (not shell files in THIS repo, so not linted;
@@ -211,6 +239,10 @@ _CRACK_BAT = (
     "where hashcat >nul 2>nul || (echo hashcat not found on PATH - install it first. & exit /b 1)\r\n"
     "echo Cracking targets.hc22000 with %WL% ...\r\n"
     "hashcat -m 22000 -a 0 targets.hc22000 \"%WL%\" --potfile-path kestrel.potfile\r\n"
+    "if exist masks.hcmask (\r\n"
+    "  echo Running the default-key masks the Pi deferred ...\r\n"
+    "  hashcat -m 22000 -a 3 targets.hc22000 masks.hcmask --potfile-path kestrel.potfile\r\n"
+    ")\r\n"
     "echo Writing recovered.txt ...\r\n"
     "REM  --outfile (not a > redirect): PowerShell's > writes UTF-16, which the\r\n"
     "REM  Kestrel can't parse; hashcat's --outfile is plain UTF-8.\r\n"
@@ -235,6 +267,10 @@ _CRACK_SH = (
     'command -v hashcat >/dev/null 2>&1 || { echo "hashcat not found on PATH - install it first."; exit 1; }\n'
     'echo "Cracking targets.hc22000 with $WL ..."\n'
     'hashcat -m 22000 -a 0 targets.hc22000 "$WL" --potfile-path kestrel.potfile || true\n'
+    'if [ -f masks.hcmask ]; then\n'
+    '  echo "Running the default-key masks the Pi deferred ..."\n'
+    '  hashcat -m 22000 -a 3 targets.hc22000 masks.hcmask --potfile-path kestrel.potfile || true\n'
+    "fi\n"
     'echo "Writing recovered.txt ..."\n'
     "hashcat -m 22000 --show targets.hc22000 "
     "--potfile-path kestrel.potfile --outfile recovered.txt\n"

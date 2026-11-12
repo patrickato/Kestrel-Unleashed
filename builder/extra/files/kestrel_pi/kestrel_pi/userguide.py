@@ -327,7 +327,7 @@ The Pi's CPU cracks slowly — around a thousand guesses a second — and it can
 On the **Loot** page (dashboard login on), open **GPU offload**:
 
 1. **Download GPU crack kit (.zip)** — a small zip with the still-uncracked networks (PMKID included) and ready-to-run scripts.
-2. On a machine with a GPU, install [hashcat](https://hashcat.net/hashcat/), unzip the kit, drop a wordlist next to it named `wordlist.txt` (rockyou is a fine start), and run `crack.bat` (Windows) or `./crack.sh` (Linux/Mac). The README inside spells it out, including how to run a brute-force mask for all-digit router keys.
+2. On a machine with a GPU, install [hashcat](https://hashcat.net/hashcat/), unzip the kit, drop a wordlist next to it named `wordlist.txt` (rockyou is a fine start), and run `crack.bat` (Windows) or `./crack.sh` (Linux/Mac). The script runs the wordlist and then, automatically, the default-key masks the Pi deferred as too slow for its CPU (shipped in the kit as `masks.hcmask`) — the 8-digit ISP/printer sweeps the GPU finishes in minutes. The README inside spells it out.
 3. The script writes `recovered.txt`. Back on the Loot page, use **Ingest results** to upload it.
 
 The recovered keys then appear in the loot, light up on the map, and each one is automatically tried against your other networks too. From the terminal the same flow is:

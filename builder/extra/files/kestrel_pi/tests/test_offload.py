@@ -151,3 +151,33 @@ def test_full_round_trip(tmp_path):
     assert offload.reconcile(aps, crack) == 1
     assert aps["AA:BB:CC:DD:EE:01"]["password"] == "correcthorse"
     assert aps["AA:BB:CC:DD:EE:01"]["status"] == "cracked"
+
+
+def test_kit_includes_deferred_device_masks(tmp_path):
+    # The GPU kit carries the default-key masks the Pi defers (a printer's
+    # 8-digit sweep here) and the scripts run them with -a 3, so the escalation
+    # completes: Pi skips the mask, the GPU runs it.
+    store = tmp_path / "mstore"; store.mkdir()
+    cap = _store(store, [("aabbccddee02", "DIRECT-ab-HP OfficeJet")])
+    aps = {"AA:BB:CC:DD:EE:02": {"essid": "DIRECT-ab-HP OfficeJet"}}
+    assert "?d?d?d?d?d?d?d?d" in offload.kit_masks(aps)
+    out = str(tmp_path / "mkit")
+    res = offload.build_kit(out, cap.hashline_files(), aps, cap.read_events)
+    assert res["masks"] >= 1
+    assert "?d?d?d?d?d?d?d?d" in open(os.path.join(out, "masks.hcmask")).read()
+    sh = open(os.path.join(out, "crack.sh")).read()
+    bat = open(os.path.join(out, "crack.bat")).read()
+    assert "-a 3" in sh and "masks.hcmask" in sh
+    assert "-a 3" in bat and "masks.hcmask" in bat
+
+
+def test_kit_has_no_mask_file_without_device_defaults(tmp_path):
+    # A plain AP with no device default adds no mask file.
+    store = tmp_path / "pstore"; store.mkdir()
+    cap = _store(store, [("aabbccddee03", "SomeHomeNet")])
+    out = str(tmp_path / "pkit")
+    res = offload.build_kit(out, cap.hashline_files(),
+                            {"AA:BB:CC:DD:EE:03": {"essid": "SomeHomeNet"}},
+                            cap.read_events)
+    assert res["masks"] == 0
+    assert not os.path.exists(os.path.join(out, "masks.hcmask"))
