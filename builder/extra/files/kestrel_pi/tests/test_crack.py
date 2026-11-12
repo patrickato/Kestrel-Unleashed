@@ -593,3 +593,14 @@ def test_readout_widget_elements():
     assert els["current"]["value"].startswith("HomeWiFi")
     assert readout.widget_elements(None) == []
     assert readout.face_summary(status)["cracked"] == 3
+
+
+def test_loot_store_is_owner_only(tmp_path):
+    # The loot store holds recovered cleartext keys; it must not be world- or
+    # group-readable (both readers run as pi). A plain open()+umask would leave
+    # it 0644, so the store sets 0600 explicitly.
+    import stat as stat_mod
+    store = LootStore(crack_dir=str(tmp_path / "crack"))
+    store.save({"AA:BB:CC:DD:EE:FF": {"essid": "home", "password": "s3cret"}})
+    mode = stat_mod.S_IMODE(os.stat(store.path).st_mode)
+    assert mode & 0o077 == 0, oct(mode)        # no group/other access at all

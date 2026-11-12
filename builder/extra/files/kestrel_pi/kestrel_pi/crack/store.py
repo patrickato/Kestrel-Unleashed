@@ -48,11 +48,15 @@ def _write_json_atomic(path, data, world_readable=False):
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(tmp, path)
-    if world_readable:
-        try:
-            os.chmod(path, 0o644)
-        except OSError:
-            pass
+    # The loot store holds recovered passwords in cleartext, so it is owner-only
+    # (the pi daemon and crack worker both run as pi; root-run CLIs still read
+    # it). open()+umask would otherwise leave it world-readable at 0644, so set
+    # the mode explicitly either way. world_readable is kept for callers that
+    # genuinely need a 0644 file (none currently write secrets through it).
+    try:
+        os.chmod(path, 0o644 if world_readable else 0o600)
+    except OSError:
+        pass
 
 
 def _tried_has(record, wl, recrack_on_new=True):
@@ -84,11 +88,13 @@ class LootStore:
         return aps if isinstance(aps, dict) else {}
 
     def save(self, aps):
+        # Owner-only: this store carries recovered cleartext keys. Both readers
+        # (the daemon and the crack worker) run as pi, so 0600 is enough and a
+        # world-readable loot file is not worth the leak.
         _write_json_atomic(
             self.path,
             {"contract_version": CRACK_CONTRACT, "updated_at": time.time(),
              "aps": aps},
-            world_readable=True,
         )
 
     @staticmethod

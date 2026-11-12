@@ -30,6 +30,14 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+# Hooks whose newest call supersedes any still-queued one, so a slow plugin
+# cannot accumulate an unbounded per-plugin backlog. on_ui_update is latest-wins
+# by nature (it renders the current UIState), and it fires on the UI refresh
+# cadence - every few seconds - so without coalescing a plugin that renders
+# slower than that would queue one render per tick forever. Other hooks
+# (on_handshake, on_epoch) carry distinct events and are never dropped.
+_COALESCE_HOOKS = frozenset({"on_ui_update"})
+
 
 class Dispatcher:
     def __init__(self, max_workers=4, max_hook_seconds=30, logger=None,
@@ -75,9 +83,22 @@ class Dispatcher:
 
         with self._lanes_lock:
             lane = self._lanes.setdefault(record, {"queue": [], "running": False})
-            lane["queue"].append((hook_name, args))
-            self._inflight += 1
-            self._idle.clear()
+            queue = lane["queue"]
+            # Coalesce latest-wins hooks: supersede a still-queued render rather
+            # than growing the lane's backlog (no new inflight work). The one
+            # currently running has already been popped, so at most one render
+            # is ever queued behind it.
+            coalesced = False
+            if hook_name in _COALESCE_HOOKS:
+                for i, (queued_hook, _) in enumerate(queue):
+                    if queued_hook == hook_name:
+                        queue[i] = (hook_name, args)
+                        coalesced = True
+                        break
+            if not coalesced:
+                queue.append((hook_name, args))
+                self._inflight += 1
+                self._idle.clear()
             if not lane["running"]:
                 lane["running"] = True
                 self._pool.submit(self._pump, record)

@@ -187,3 +187,48 @@ def test_base_noop_hooks_are_skipped():
     assert disp.wait_idle(1)
     disp.shutdown()
     assert rec.last_hook == ""   # nothing ran
+
+def test_ui_update_coalesces_under_a_slow_plugin():
+    # on_ui_update is latest-wins: while a slow render is in flight, a burst of
+    # newer ones supersede each other instead of stacking an unbounded backlog,
+    # so the plugin runs the in-flight render plus at most one pending one.
+    gate = threading.Event()
+    started = threading.Event()
+    ran = []
+
+    class SlowUI(Plugin):
+        def on_ui_update(self, ui, state):
+            ran.append(1)
+            started.set()
+            gate.wait(5)
+
+    rec = _record(SlowUI(), "ui")
+    disp = Dispatcher(max_workers=4, max_hook_seconds=5)
+    disp.dispatch(rec, "on_ui_update", None, None)
+    assert started.wait(3)                 # first render is running (parked)
+    for _ in range(8):                     # a burst while it is parked
+        disp.dispatch(rec, "on_ui_update", None, None)
+    gate.set()
+    assert disp.wait_idle(5)
+    disp.shutdown()
+    # Without coalescing this would be 9; the burst collapses to one pending
+    # render behind the one that was already running.
+    assert len(ran) == 2, len(ran)
+
+
+def test_distinct_events_are_never_coalesced():
+    # on_epoch carries a distinct event each tick, so none are dropped even
+    # under a burst - all five run (serially).
+    seen = []
+
+    class Counter(Plugin):
+        def on_epoch(self, epoch, info):
+            seen.append(epoch)
+
+    rec = _record(Counter(), "c")
+    disp = Dispatcher(max_workers=4, max_hook_seconds=5)
+    for i in range(5):
+        disp.dispatch(rec, "on_epoch", i, {})
+    assert disp.wait_idle(5)
+    disp.shutdown()
+    assert sorted(seen) == [0, 1, 2, 3, 4]
