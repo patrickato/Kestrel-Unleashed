@@ -173,3 +173,41 @@ def test_launch_script_quotes_and_uses_mode_22000(tmp_path):
     assert "-m 22000" in script and "--show" in script
     assert "'/home/me/my lists/rock.txt'" in script      # shlex-quoted (has space)
     assert "setsid" in script and "crack.lock" in script
+
+
+# --- the deferred device masks ride the SSH offload too ---------------------
+def test_launch_script_runs_deferred_masks(tmp_path):
+    # The GPU runs the masks the Pi deferred with -a 3, after the wordlist and
+    # into the same potfile --show reads, guarded by -s so an empty or stale
+    # mask file is skipped rather than erroring or re-running last cycle's.
+    p, _ = _configured(tmp_path)
+    script = p._launch_script()
+    assert "-a 3" in script and "masks.hcmask" in script
+    assert "[ -s masks.hcmask ]" in script
+
+
+def test_launch_uploads_device_masks_when_deferred(tmp_path, monkeypatch):
+    monkeypatch.setattr(RC, "CRACK_DIR", str(tmp_path / "crack"))
+    p, _ = _configured(tmp_path)
+    monkeypatch.setattr(p, "_remote", lambda script, timeout=None: (True, "ok"))
+    uploads = {}
+
+    def fake_up(local, remote):
+        with open(local, encoding="utf-8") as fh:
+            uploads[os.path.basename(remote)] = fh.read()
+        return (True, "")
+
+    monkeypatch.setattr(p, "_rsync_up_file", fake_up)
+
+    # A printer AP: the 8-digit sweep the Pi defers rides along as masks.hcmask.
+    masks = offload.kit_masks({"AA:BB:CC:DD:EE:02":
+                               {"essid": "DIRECT-ab-HP OfficeJet"}})
+    assert p._launch(["WPA*02*deadbeef"], masks) is True
+    assert "?d?d?d?d?d?d?d?d" in uploads.get("masks.hcmask", "")
+
+    # A plain AP with no device default: an empty mask file, so the remote -s
+    # guard skips the mask pass (and a prior cycle's mask file is overwritten).
+    uploads.clear()
+    masks = offload.kit_masks({"AA:BB:CC:DD:EE:03": {"essid": "PlainHomeNet"}})
+    assert p._launch(["WPA*02*deadbeef"], masks) is True
+    assert uploads.get("masks.hcmask", "unset") == ""

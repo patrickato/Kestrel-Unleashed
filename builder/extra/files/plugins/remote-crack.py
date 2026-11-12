@@ -200,7 +200,7 @@ class RemoteCrack(Plugin):
             return
         if manual:
             self._offloaded = set()        # force a full re-offload
-        if self._launch(lines):
+        if self._launch(lines, offload.kit_masks(aps)):
             self._offloaded |= bssids
             self._set_status("cracking %d network(s) on %s"
                              % (len(lines), self._host()))
@@ -306,8 +306,9 @@ class RemoteCrack(Plugin):
             return "finished"            # stale lock = crashed run, treat as done
         return "finished" if has_result else "none"
 
-    def _launch(self, lines):
-        """Upload the uncracked hashlines and launch a detached hashcat run."""
+    def _launch(self, lines, masks=()):
+        """Upload the uncracked hashlines (and the default-key masks the Pi
+        deferred) and launch a detached hashcat run."""
         local = os.path.join(self._workdir(), "targets.hc22000")
         try:
             os.makedirs(self._workdir(), exist_ok=True)
@@ -321,6 +322,20 @@ class RemoteCrack(Plugin):
         if not up_ok:
             self.log.warning("remote-crack: target upload failed: %s", out)
             return False
+        # The masks the Pi deferred ride along so the GPU runs them too. An empty
+        # file when there are none, so the remote -s guard skips the mask pass and
+        # a stale mask file from a prior cycle is overwritten rather than re-run.
+        mlocal = os.path.join(self._workdir(), "masks.hcmask")
+        try:
+            with open(mlocal, "w", encoding="utf-8") as fh:
+                fh.write(("\n".join(masks) + "\n") if masks else "")
+        except OSError as exc:
+            self.log.warning("remote-crack: cannot stage masks: %s", exc)
+        else:
+            m_ok, mout = self._rsync_up_file(
+                mlocal, "%s/masks.hcmask" % self._remote_path())
+            if not m_ok:
+                self.log.warning("remote-crack: mask upload failed: %s", mout)
         ok, out = self._remote(self._launch_script(), timeout=120)
         if not ok:
             self.log.warning("remote-crack: launch failed: %s", out)
@@ -338,6 +353,8 @@ class RemoteCrack(Plugin):
             "date +%%s > crack.lock\n"
             "if %(hc)s -m 22000 -a 0 targets.hc22000 %(wl)s "
             "--potfile-path kestrel.potfile %(extra)s; then r=ok; else r=err; fi\n"
+            "if [ -s masks.hcmask ]; then %(hc)s -m 22000 -a 3 targets.hc22000 "
+            "masks.hcmask --potfile-path kestrel.potfile %(extra)s || true; fi\n"
             "%(hc)s -m 22000 --show targets.hc22000 "
             "--potfile-path kestrel.potfile > recovered.txt 2>/dev/null\n"
             "echo \"$r\" > crack.result\n"
