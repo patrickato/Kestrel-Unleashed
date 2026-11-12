@@ -186,6 +186,28 @@ def _ctl():
     return {"ready": True, "csrf": "t", "qs": "", "enabled": {}, "acked": True}
 
 
+def _plugin(name, state="loaded"):
+    return {"name": name, "state": state, "target_api": 2, "capabilities": [],
+            "capability_violations": [], "reason": "", "note": "", "last_error": ""}
+
+
+def test_dashboard_has_map_nav_card_when_map_plugin_loaded():
+    # The wardriving map is promoted to a one-tap home-screen card so it is
+    # reachable on an on-device display (the kiosk) without digging through the
+    # Plugins page; it links straight to the map's own view.
+    html = web._render_status(_status([_plugin("map")]), _ctl())
+    assert 'href="/plugins/map/view"' in html
+    assert "Wardriving map" in html
+
+
+def test_dashboard_hides_map_nav_card_unless_map_plugin_is_loaded():
+    # No card when the map plugin is absent or present-but-disabled - its page
+    # exists only while the plugin is loaded, so a card then would 404.
+    assert 'href="/plugins/map/view"' not in web._render_status(_status([]), _ctl())
+    disabled = _status([_plugin("map", state="disabled")])
+    assert 'href="/plugins/map/view"' not in web._render_status(disabled, _ctl())
+
+
 def test_bt_pair_control_shows_when_no_phone_is_paired():
     # No bluetooth key (or paired False) => unpaired => the discreet re-pair
     # control shows and posts to /bt-pair.

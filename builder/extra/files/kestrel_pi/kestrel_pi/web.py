@@ -2203,6 +2203,26 @@ def _portal_nav(control):
     )
 
 
+def _map_nav(plugins, control):
+    """Dashboard nav card for the wardriving map (``/plugins/map/view``), shown
+    only when the map plugin is loaded (its page exists only then). Promotes the
+    map to a one-tap card on the home screen so it is reachable on an on-device
+    display (the kiosk) without digging through the Plugins page - the map is a
+    first-class wardriving view, not a buried plugin action."""
+    loaded = any(p.get("name") == "map" and p.get("state") == "loaded"
+                 for p in (plugins or []))
+    if not loaded:
+        return ""
+    return (
+        '<a class="navcard" href="' + _esc(_url("/plugins/map/view", control)) + '">'
+        '<div class="scol"><span class="skey">Wardriving map</span>'
+        '<span class="sval">live route &amp; located networks</span>'
+        '<span class="smeta">Your position, track and captured APs on a map</span>'
+        "</div>"
+        '<span class="arrow" aria-hidden="true">&rarr;</span></a>'
+    )
+
+
 # The two device-power actions, with the words each page needs. Shut down is the
 # destructive one (the device will not come back on its own), so it is red.
 _POWER_WORDS = {
@@ -3406,6 +3426,7 @@ def _render_status(status, control=None, message=None, error=False, addresses=No
         + ' AP(s)</span>'
         '<span class="smeta">Browse by network or access point</span></div>'
         '<span class="arrow" aria-hidden="true">&rarr;</span></a>'
+        + _map_nav(plugins, control)
         + _loot_nav(status.get("crack"), control)
         + _wps_nav(control)
         + _portal_nav(control)

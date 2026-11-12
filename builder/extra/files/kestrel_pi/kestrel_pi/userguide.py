@@ -459,7 +459,7 @@ The GPS card shows fix status (`no fix` / `2D fix` / `3D fix`), satellites in us
 
 ### map (the wardriving map)
 
-Turns everything `gps` records into a live map you open right in the dashboard — the view that makes the device a true wardriving tool and not just a capture box. Enable `gps` (with a receiver and a fix) and `map`, drive, and the **Map** button on the Plugins page opens a full-screen map with:
+Turns everything `gps` records into a live map you open right in the dashboard — the view that makes the device a true wardriving tool and not just a capture box. Enable `gps` (with a receiver and a fix) and `map`, drive, and open the full-screen map from the **Wardriving map** card on the dashboard home (or the **Map** button on the Plugins page). Either way you get:
 
 - a **heatmap** showing where the air is thick with networks (the hero layer);
 - every located network as a **marker** — recovered networks lit in gold, still-uncracked ones in blue — tap one for its name, BSSID, coordinates and capture signal;
