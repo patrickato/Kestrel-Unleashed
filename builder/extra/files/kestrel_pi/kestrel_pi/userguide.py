@@ -440,7 +440,7 @@ sudo kestrel plugins enable gps --set source=serial --set device=/dev/ttyACM0
 
 Run in a terminal, `plugins enable` also walks you through the options (secrets are masked). To change an option later, re-run `plugins enable <name> --set key=value` with the new value (or edit it on the plugin's web config page). Enabling does not require a reboot or even a daemon restart for the common cases. Disable with `sudo kestrel plugins disable <name>`, or the Disable control on the dashboard.
 
-The authorized-use acknowledgment: any plugin that sends data off the device (the `network` capability: `wpa-sec`, `onlinehashcrack`, `wigle`, `backup`, `remote-train`, `remote-crack`, and `updates`) takes the same explicit authorized-use acknowledgment as capture before it turns on, whether you enable it from the dashboard or the terminal. In a terminal you are prompted; add `--yes` for scripts. The acknowledgment is remembered device-wide, so once you have enabled capture it is silent afterward. Local-only plugins (`memtemp`, `session-stats`, `ups-hat`, `eink`, `map`, `wardrive`, `auto-whitelist`, and `gps` reading a local receiver) never need it.
+The authorized-use acknowledgment: any plugin that sends data off the device (the `network` capability: `wpa-sec`, `onlinehashcrack`, `wigle`, `backup`, `remote-train`, `remote-crack`, and `updates`) takes the same explicit authorized-use acknowledgment as capture before it turns on, whether you enable it from the dashboard or the terminal. In a terminal you are prompted; add `--yes` for scripts. The acknowledgment is remembered device-wide, so once you have enabled capture it is silent afterward. Local-only plugins (`memtemp`, `session-stats`, `ups-hat`, `eink`, `map`, `wardrive`, `auto-whitelist`, `locator`, and `gps` reading a local receiver) never need it.
 
 Where things live: bundled plugins are in `/usr/local/lib/kestrel/plugins/`; your own overrides go in `/etc/kestrel/plugins/` (a plugin there with the same name takes precedence). Each plugin has a `[plugins.<name>]` table in `config.toml`; prefer the dashboard or the CLI over hand-editing. If a plugin shows an error, `sudo kestrel plugins info <name>` reports its health and `sudo journalctl -u kestrel-daemon` shows why it failed to load. A failed plugin never stops the daemon or the others. A plugin you add must subclass `Plugin` directly and write its declarations (`__options__`, `__capabilities__` and the like) as plain literals, because the device reads them without running the plugin; one that doesn't is listed as `invalid` by `kestrel plugins list` and is not loaded. The older `@plugins.on` decorator style is not supported.
 
@@ -509,6 +509,13 @@ The map's companion: where the map shows you *where*, the scoreboard shows you *
 - Enable: `sudo kestrel plugins enable wardrive`
 - A dashboard card shows the headline numbers (networks, access points, strong material, cracked, mapped, route); the **Scoreboard** button on the Plugins page opens the full breakdown.
 - No options — it reflects whatever capture, `gps` and the cracker have produced.
+
+### locator (find an AP on foot)
+
+Turns the station Wi-Fi into a **warmer/colder** finder for homing in on where an access point physically is. Open its **Locate** page, pick an AP from the scanned list, and walk — the page shows a big *Warmer* / *Colder* / *Steady* reading (with an arrow and a signal bar, never colour alone) and updates every couple of seconds as the signal rises or falls. *Lost — backtrack* means the AP dropped out of the last scan. Local-only (it only scans and reads), so no authorized-use acknowledgment; no always-on service.
+
+- Enable: `sudo kestrel plugins enable locator`
+- No options. It reads signal from an ordinary Wi-Fi scan, so it works on the built-in Wi-Fi without touching the capture dongle.
 
 ### ups-hat (battery readout and auto-shutdown)
 
