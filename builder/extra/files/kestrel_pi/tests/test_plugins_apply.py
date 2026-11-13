@@ -62,7 +62,7 @@ def test_declarations_read_statically(env):
     assert set(plugins) == {"gps", "memtemp", "session-stats", "wigle",
                             "wpa-sec", "backup", "ups-hat", "updates",
                             "remote-train", "eink", "map", "remote-crack",
-                            "auto-whitelist", "wardrive"}
+                            "auto-whitelist", "wardrive", "onlinehashcrack"}
     wpa, _src = plugins["wpa-sec"]
     assert "network" in wpa["capabilities"]
     assert wpa["options"]["api_key"] == {"type": "str", "required": True, "secret": True}
