@@ -831,6 +831,31 @@ _PSK_RE = re.compile(r"\A(?:[\x20-\x7e]{8,63}|[0-9A-Fa-f]{64})\Z")
 _SSID_RE = re.compile(r"\A(?!-)[^\x00-\x1f]{1,32}\Z")
 
 
+def apply_wifi_up(change):
+    """Bring up a saved Wi-Fi connection by name, for the auto-uplink fallback:
+
+      {"target": "wifi-up", "name": str}
+
+    The name is a NetworkManager profile the operator already saved (via
+    ``kestrel network wifi``), so no key is passed and nothing secret is handled
+    -- it just activates an existing, operator-added profile when the device is
+    offline. Driven by the auto-uplink plugin as automation."""
+    name = change.get("name")
+    if not isinstance(name, str) or not _SSID_RE.match(name):
+        return {"ok": False, "error": "invalid connection name"}
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/nmcli", "connection", "up", "id", name],
+            capture_output=True, text=True, timeout=45, check=False,
+            stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "error": "could not run nmcli: %s" % exc}
+    if proc.returncode != 0:
+        return {"ok": False, "error": (proc.stderr or "bring-up failed").strip()[:200]}
+    sys.stderr.write("plugins-ctl apply: wifi-up (auto-uplink fallback)\n")
+    return {"ok": True, "wifi": "up"}
+
+
 def apply_wifi_connect(change):
     """Connect the station Wi-Fi to a cracked network, for a field uplink:
 
@@ -1181,6 +1206,10 @@ def apply_change(change):
     # stays gated below, as do all the real web controls.
     if change.get("target") == "clock-set":
         return apply_clock_set(change)
+    if change.get("target") == "wifi-up":
+        # auto-uplink bringing up an operator-saved profile when offline; no key,
+        # no new privilege (NM already autoconnects these), so allowed headless.
+        return apply_wifi_up(change)
     if change.get("target") == "capture-whitelist" and change.get("action") == "add":
         return apply_capture_whitelist(change)
     if not web_control_ready(config):

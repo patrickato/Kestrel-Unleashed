@@ -63,7 +63,7 @@ def test_declarations_read_statically(env):
                             "wpa-sec", "backup", "ups-hat", "updates",
                             "remote-train", "eink", "map", "remote-crack",
                             "auto-whitelist", "wardrive", "onlinehashcrack",
-                            "locator"}
+                            "locator", "auto-uplink"}
     wpa, _src = plugins["wpa-sec"]
     assert "network" in wpa["capabilities"]
     assert wpa["options"]["api_key"] == {"type": "str", "required": True, "secret": True}
@@ -1259,3 +1259,21 @@ def test_wifi_connect_via_dispatcher_needs_web_auth(env):
     cs.set_value(str(env / "config.toml"), "web", "auth", '"none"')
     reply = ctl.apply_change({"target": "wifi-connect", "ssid": "N", "psk": "x" * 10})
     assert reply["ok"] is False and "web auth" in reply["error"]
+
+
+def test_wifi_up_runs_nmcli_and_is_allowed_headless(env, monkeypatch):
+    # auto-uplink brings up a saved profile; allowed regardless of web auth
+    # (operator automation, no key), like clock-set.
+    cs.set_value(str(env / "config.toml"), "web", "auth", '"none"')
+    seen = {}
+    monkeypatch.setattr(ctl.subprocess, "run",
+                        lambda argv, **k: seen.update(argv=argv) or _types.SimpleNamespace(
+                            returncode=0, stdout="", stderr=""))
+    reply = ctl.apply_change({"target": "wifi-up", "name": "HomeNet"})
+    assert reply["ok"] is True
+    assert seen["argv"] == ["/usr/bin/nmcli", "connection", "up", "id", "HomeNet"]
+
+
+def test_wifi_up_rejects_a_bad_name():
+    assert ctl.apply_wifi_up({"name": "-bad"})["ok"] is False
+    assert ctl.apply_wifi_up({"name": ""})["ok"] is False
