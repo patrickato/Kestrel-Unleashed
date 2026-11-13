@@ -48,6 +48,9 @@ Usage: $PROG <command>
   network wifi ...    Set Wi-Fi station credentials (--ssid, --psk, --hidden, --country,
                      --band 2.4|5|any); --band alone changes the saved network
   network bt-pair    Forget the paired phone and reopen Bluetooth onboarding
+  radios             Show every Wi-Fi/Bluetooth radio and its assigned role
+                     (capture / deauth / station / BT tether / scan), with the
+                     reason for each and any notes (e.g. plug in a 2nd adapter)
   capture            Capture menu (AngryOxide; opt-in, off by default)
   capture status     Show capture state, adapter and store
   capture enable ...  Enable capture (--interface auto|wlanX, --yes to skip the prompt)
@@ -2897,12 +2900,36 @@ cmd_setup() {
     done
 }
 
+# radios -- show the Wi-Fi/Bluetooth inventory and the role each radio was
+# assigned. Read-only; runs the package's pure assignment over the live
+# inventory as pi (sysfs + `iw phy info` need no privilege) and prints the
+# glass-box table. Operator overrides come from the [radios] table in config.
+cmd_radios() {
+    [ "${1:-}" = status ] && shift || true
+    [ $# -eq 0 ] || die "usage: $PROG radios [status]"
+    run_as_pi "$PWN_VENV_PYTHON" -I - "$PWN_CONFIG" <<'PY'
+import sys
+from kestrel_pi import radios
+from kestrel_pi.config import load_config
+
+conf = load_config(sys.argv[1]) if len(sys.argv) > 1 else load_config()
+rconf = (conf or {}).get("radios") or {}
+inv = radios.inventory()
+assignment = radios.assign_roles(
+    inv,
+    overrides=radios.load_overrides(rconf),
+    allow_shared_attack=radios.allow_shared_attack(rconf))
+print(radios.render_text(inv, assignment))
+PY
+}
+
 main() {
     local cmd=${1:-setup}
     [ $# -gt 0 ] && shift || true
     case "$cmd" in
         setup) cmd_setup "$@" ;;
         network) cmd_network "$@" ;;
+        radios) cmd_radios "$@" ;;
         capture) cmd_capture "$@" ;;
         crack) cmd_crack "$@" ;;
         wps) cmd_wps "$@" ;;

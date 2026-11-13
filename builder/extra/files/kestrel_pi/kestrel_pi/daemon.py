@@ -20,6 +20,7 @@ import threading
 import time
 
 from . import HOOK_API_VERSION, __version__
+from . import radios as radios_mod
 from .agent import AGENT_DIR
 from .agent import readout as agent_readout
 from .crack import readout as crack_readout
@@ -56,6 +57,9 @@ CRACK_SERVICE = "kestrel-crack.service"
 # seconds of piled-up subprocesses; it is far below any refresh interval, so the
 # card still reflects a service change on the next tick.
 _SERVICE_STATE_TTL = 2.0
+# Radio inventory changes only on hotplug; cache it so status() (polled by the
+# dashboard) doesn't spawn `iw` on every request.
+_RADIOS_TTL = 20.0
 # After a capture toggle the dashboard re-renders straight away, but the cache
 # above can still hold the pre-change state, and `capture enable` starts the
 # service with --no-block, so it may not be up yet. The toggle re-probes for up
@@ -164,6 +168,10 @@ class Daemon:
         # config.toml parsed once per on-disk version (see _fresh_config).
         self._cfg_cache = None        # (stat key, parsed dict)
         self._cfg_cache_lock = threading.Lock()
+        # Radio inventory + role assignment, cached with a short TTL (hotplug is
+        # rare and `iw` is a subprocess; see _radios_state).
+        self._radios_cache = None     # (expiry, radios_list, assignment)
+        self._radios_lock = threading.Lock()
         self.services = ServiceRegistry(self.log)
         # Expose the learning agent's published readout as a service so a UI
         # plugin (the e-ink face) can react to agent state without importing the
@@ -504,6 +512,30 @@ class Daemon:
         state: see _wait_service_state."""
         return self._wait_service_state(CAPTURE_SERVICE, running, timeout)
 
+    def _radios_state(self, cfg):
+        """``(radios_list, assignment)`` from a short-TTL cache. The inventory
+        shells out to ``iw``, so this bounds the spawn rate under dashboard
+        polling; it refreshes on hotplug within _RADIOS_TTL. The daemon runs as
+        pi and reads sysfs + `iw phy info`, which need no privilege."""
+        now = time.monotonic()
+        with self._radios_lock:
+            cached = self._radios_cache
+            if cached and cached[0] > now:
+                return cached[1], cached[2]
+        radios_conf = cfg.get("radios") or {}
+        try:
+            radios_list = radios_mod.inventory()
+            assignment = radios_mod.assign_roles(
+                radios_list,
+                overrides=radios_mod.load_overrides(radios_conf),
+                allow_shared_attack=radios_mod.allow_shared_attack(radios_conf))
+        except Exception:  # noqa: BLE001 -- inventory must never break status()
+            self.log.exception("radios: inventory failed")
+            radios_list, assignment = [], radios_mod.assign_roles([])
+        with self._radios_lock:
+            self._radios_cache = (now + _RADIOS_TTL, radios_list, assignment)
+        return radios_list, assignment
+
     def _wait_service_state(self, service, running, timeout=None):
         """Drop the cached state (it may predate the change), then re-probe
         until the service is running (or stopped) as wanted, or the bounded
@@ -653,6 +685,14 @@ class Daemon:
             crack_status, crack_readout.read_progress())
         if crack_elements:
             widgets[crack_readout.CARD_NAME] = crack_elements
+        # Multi-radio inventory + role assignment, merged into the same grouped
+        # widget model so the "Radios" card draws on every screen that renders
+        # the dashboard (web, e-ink). Cached, so this doesn't spawn `iw` per poll.
+        radios_list, radios_assignment = self._radios_state(cfg)
+        radios_elements = radios_mod.widget_elements(
+            radios_list, radios_assignment)
+        if radios_elements:
+            widgets[radios_mod.CARD_NAME] = radios_elements
         return {
             "version": __version__,
             "hook_api": HOOK_API_VERSION,
@@ -689,6 +729,7 @@ class Daemon:
                 "status": crack_status,
             },
             "bluetooth": {"paired": self._bt_paired()},
+            "radios": radios_mod.summary(radios_list, radios_assignment),
             "services": self.services.names(),
             "ui": self.ui.elements(),
             "widgets": widgets,

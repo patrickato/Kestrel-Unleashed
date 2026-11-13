@@ -325,6 +325,39 @@ def test_wait_capture_state_gives_up_at_once_without_systemctl(tmp_path, monkeyp
     assert len(calls) == 1
 
 
+def test_status_surfaces_radios_card_and_section(tmp_path, monkeypatch):
+    # The multi-radio inventory + role assignment reaches the dashboard as a
+    # "Radios" widget card and the status payload as a "radios" section, with
+    # the [radios] overrides applied. inventory() is faked so no `iw` runs.
+    from kestrel_pi.radios import make_bt_radio, make_wifi_radio
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("[web]\nenabled = false\n"
+                   "[radios]\nassign = [\"wlan1=attack\"]\n")
+    d = daemon_mod.Daemon(config_path=str(cfg), capture_store=str(tmp_path))
+
+    onboard = make_wifi_radio("wlan0", driver="brcmfmac", bus="sdio")
+    usb = make_wifi_radio("wlan1", driver="rtl8812au", bus="usb",
+                          phy_info="* monitor\n* 2412 MHz [1]")
+    bt = make_bt_radio("hci0", bus="uart")
+    monkeypatch.setattr(daemon_mod.radios_mod, "inventory",
+                        lambda *a, **k: [onboard, usb, bt])
+
+    st = d.status()
+    assert "Radios" in st["widgets"]                         # on the dashboard
+    assert st["radios"]["owners"]["station"] == "wlan0"      # built-in reserved
+    assert st["radios"]["owners"]["attack"] == "wlan1"       # override honoured
+    assert st["radios"]["owners"]["pan"] == "hci0"
+
+    # the inventory is cached, so a second status() doesn't re-run inventory()
+    calls = {"n": 0}
+    orig = [onboard, usb, bt]
+    monkeypatch.setattr(daemon_mod.radios_mod, "inventory",
+                        lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1),
+                                         orig)[1])
+    d.status()
+    assert calls["n"] == 0                                   # served from cache
+
+
 def test_status_probes_each_service_at_most_once(tmp_path, monkeypatch):
     # The capture service used to be read twice per status() (card + environment);
     # it is now read once, so a render makes one probe per distinct service.

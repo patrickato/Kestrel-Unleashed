@@ -475,3 +475,120 @@ def inventory(wifi: Optional[Sequence[Radio]] = None,
     w = list(wifi) if wifi is not None else collect_wifi(builtin_driver)
     b = list(bluetooth) if bluetooth is not None else collect_bluetooth()
     return w + b
+
+
+# --- config overrides -------------------------------------------------------
+def load_overrides(radios_conf: Optional[dict]) -> Dict[str, str]:
+    """Parse the ``[radios] assign`` table into ``{key: role}``. The config form
+    is a list of ``"<key>=<role>"`` strings (e.g. ``["wlan1=attack",
+    "rtl8812au=capture"]``) so a colon-bearing MAC or sysfs path needs no TOML key
+    quoting. Malformed entries are skipped."""
+    out: Dict[str, str] = {}
+    for item in (radios_conf or {}).get("assign") or []:
+        s = str(item)
+        if "=" not in s:
+            continue
+        key, role = s.split("=", 1)
+        key, role = key.strip(), role.strip()
+        if key:
+            out[key] = role
+    return out
+
+
+def allow_shared_attack(radios_conf: Optional[dict]) -> bool:
+    """Whether active deauth may share the capture radio when only one monitor
+    adapter is present (``[radios] allow_shared_attack``, default on)."""
+    return bool((radios_conf or {}).get("allow_shared_attack", True))
+
+
+# --- readout (dashboard card + CLI + status payload) ------------------------
+# The widget-group key is also the card's display title (like the agent's
+# "Learning agent" and quick-crack's "Quick-crack"). Unlike those two, this card
+# is meant to stay ON the dashboard, so it is not in web.py's dashboard-exclusion
+# set -- the operator sees their adapters and role assignment on the main screen.
+CARD_NAME = "Radios"
+
+_ROLE_LABEL = {
+    "capture": "Capture",
+    "attack": "Deauth",
+    "station": "Station / uplink",
+    "pan": "BT tether",
+    "scan": "BT scan",
+}
+
+
+def widget_elements(radios_list: Sequence[Radio],
+                    assignment: Assignment) -> List[dict]:
+    """The grouped ``{name,label,value,kind}`` elements for the dashboard
+    "Radios" card: one row per owned role, a detected count, and the first
+    glass-box notice (so "plug in a dongle" shows on the screen, not just logs)."""
+    by_dev = {r.dev: r for r in radios_list}
+    out: List[dict] = []
+    for role in ("capture", "attack", "station", "pan", "scan"):
+        dev = assignment.owner(role)
+        if not dev:
+            continue
+        r = by_dev.get(dev)
+        chip = (r.chipset or r.driver) if r else ""
+        value = dev + (" · " + chip if chip else "")
+        if assignment.is_shared(role):
+            value += " (shared)"
+        out.append({"name": role, "label": _ROLE_LABEL.get(role, role),
+                    "value": value, "kind": "text"})
+    if radios_list:
+        out.append({"name": "detected", "label": "Radios detected",
+                    "value": str(len(radios_list)), "kind": "number"})
+    if assignment.notices:
+        out.append({"name": "notice", "label": "Note",
+                    "value": assignment.notices[0], "kind": "text"})
+    return out
+
+
+def summary(radios_list: Sequence[Radio], assignment: Assignment) -> dict:
+    """A JSON-friendly snapshot for the status payload and the CLI."""
+    return {
+        "radios": [{
+            "dev": r.dev, "kind": r.kind,
+            "role": assignment.roles.get(r.dev, "idle"),
+            "chipset": r.chipset, "driver": r.driver, "bus": r.bus,
+            "monitor": r.monitor, "builtin": r.builtin,
+            "bands": list(r.bands), "injection": r.injection,
+            "reason": assignment.reasons.get(r.dev, ""),
+        } for r in radios_list],
+        "owners": dict(assignment.owners),
+        "shared": dict(assignment.shared),
+        "notices": list(assignment.notices),
+    }
+
+
+def render_text(radios_list: Sequence[Radio],
+                assignment: Assignment) -> str:
+    """A plain-text inventory + role table for ``kestrel radios`` (glass-box, no
+    keyboard needed to read it over SSH or on the console)."""
+    if not radios_list:
+        return "No radios detected."
+    lines = ["Radios (%d):" % len(radios_list)]
+    for r in radios_list:
+        role = assignment.roles.get(r.dev, "idle")
+        facts = []
+        if r.kind == "wifi":
+            facts.append("monitor" if r.monitor else "no-monitor")
+            if r.bands:
+                facts.append("/".join(r.bands) + "GHz")
+            if r.injection != "unknown":
+                facts.append("inj:" + r.injection)
+        shared = " (shared)" if (assignment.is_shared(role)
+                                 and assignment.owner(role) == r.dev) else ""
+        detail = r.label()
+        if facts:
+            detail += " [" + ", ".join(facts) + "]"
+        lines.append("  %-6s %-16s %s%s" % (r.dev, role.upper(), detail, shared))
+        why = assignment.reasons.get(r.dev)
+        if why:
+            lines.append("           - %s" % why)
+    if assignment.notices:
+        lines.append("")
+        lines.append("Notes:")
+        for n in assignment.notices:
+            lines.append("  * %s" % n)
+    return "\n".join(lines)
