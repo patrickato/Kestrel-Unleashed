@@ -216,7 +216,10 @@ How to use this file:
   hit lands on `/loot` tagged `via WPS (pin …)`. Check the capture service
   actually stops for the run and restarts after. Confirm the `reaver -vv` field
   labels this build prints still match `_PIN_RE`/`_PSK_RE`/`_SSID_RE` in
-  `wps.py`, and tighten the regexes if the Kali/bookworm reaver differs.
+  `wps.py`, and tighten the regexes if the Kali/bookworm reaver differs. Same for
+  the live readout: watch `/wps` during a real attack and confirm the stage,
+  percent and rate parse (`parse_reaver_progress` / `_RP_PCT` / `_RP_RATE`) and
+  that `attack-progress.json` never shows the recovered key.
 - **Pick up when:** a Pi + dongle + an authorized WPS AP are on hand.
 
 ## Evil-portal (`kestrel evil-portal`)

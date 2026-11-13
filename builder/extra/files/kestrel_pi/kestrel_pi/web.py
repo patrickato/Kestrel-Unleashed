@@ -40,6 +40,7 @@ from urllib.parse import quote, urlencode
 
 from . import config_catalog
 from . import evilportal
+from . import wps as wps_mod
 from .applyclient import APPLY_SOCKET, apply_change
 from .connectivity import MANAGEMENT_INTERFACES
 from . import device_id
@@ -87,6 +88,10 @@ CONTROLS_OFF = (
 WPS_DIR = "/var/lib/kestrel/wps"
 WPS_STATE_FILE = os.path.join(WPS_DIR, "state")
 WPS_SCAN_FILE = os.path.join(WPS_DIR, "scan.txt")
+# The live attack readout the `kestrel wps` live filter writes while reaver runs
+# (kestrel_pi.wps.PROGRESS_NAME). Secret-free by construction; the /wps page
+# overlays it on the "attacking" state so a long run shows real progress.
+WPS_PROGRESS_FILE = os.path.join(WPS_DIR, "attack-progress.json")
 # The evil-portal's run dir (captured submissions) and its start-on-demand
 # service, for the /portal page. Submissions are plaintext, so the page shows
 # them only when web auth is on (like the wpa-sec "Show" view).
@@ -2238,6 +2243,82 @@ def _wps_state_age():
         return None
 
 
+def _wps_progress():
+    """The live reaver readout (``attack-progress.json``) as ``(progress,
+    fresh)``, or ``(None, False)`` when absent/unreadable. ``fresh`` is False
+    once the run is done or the file has gone stale. Secret-free by
+    construction (the live filter never writes the PSK/PIN here)."""
+    try:
+        with open(WPS_PROGRESS_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return (None, False)
+    if not isinstance(data, dict):
+        return (None, False)
+    return (data, wps_mod.is_fresh(data))
+
+
+# How reaver's stage maps to a one-line "what it's doing" phrase for the page.
+_WPS_STAGE_PHRASE = {
+    "starting": "starting up",
+    "waiting": "waiting for the AP's beacon",
+    "associated": "associated — starting the WPS exchange",
+    "pin-brute": "trying WPS PINs",
+    "pixie-dust": "running the offline Pixie-Dust attack",
+    "rate-limited": "being rate-limited by the AP (backing off)",
+    "recovered": "recovered a key",
+    "failed": "finished — no key (AP locked or not vulnerable)",
+    "ended": "stopped",
+}
+
+
+def _wps_attack_card(target, control, progress, fresh):
+    """The live 'attacking …' block for /wps. Uses the reaver readout when it is
+    fresh; otherwise a generic 'working' line driven by the state file, so a
+    quiet beacon-wait doesn't hide the running attack."""
+    loot = '<a href="' + _esc(_url("/loot", control)) + '">Loot</a>'
+    prog = progress if isinstance(progress, dict) else {}
+    done = bool(prog.get("done"))
+    stage = prog.get("stage") or "starting"
+
+    if done:
+        outcome = prog.get("outcome") or stage
+        if outcome == "recovered":
+            body = ("Recovered a key from " + _esc(target or "the AP")
+                    + " — it's on " + loot + ".")
+        else:
+            body = ("Finished attacking " + _esc(target or "the AP") + " — "
+                    + _esc(_WPS_STAGE_PHRASE.get(outcome, "no key recovered"))
+                    + ". Nothing was added to " + loot + ".")
+        return '<p class="count">' + body + "</p>"
+
+    phrase = _WPS_STAGE_PHRASE.get(stage, "working") if fresh else "working"
+    pct = prog.get("percent") if fresh else None
+    pct_txt = ""
+    if isinstance(pct, (int, float)):
+        pct_txt = " (~%.1f%% through the PIN space)" % pct
+    line = ("Attacking " + _esc(target or "an AP") + " — reaver is "
+            + _esc(phrase) + pct_txt + ". reaver can take many minutes; the key "
+            "lands on " + loot + " if it succeeds. This page updates on its own.")
+    html_out = '<p class="count">' + line + "</p>"
+
+    meta = []
+    if fresh:
+        started = prog.get("started_at")
+        if isinstance(started, (int, float)):
+            secs = max(0, int(time.time() - started))
+            meta.append("elapsed %s" % _fmt_span(secs))
+        if prog.get("rate"):
+            meta.append("rate " + _esc(str(prog["rate"])))
+        if prog.get("last"):
+            meta.append(_esc(str(prog["last"])))
+    if prog.get("locked"):
+        meta.insert(0, "AP is rate-limiting WPS")
+    if meta:
+        html_out += '<p class="smeta">' + " · ".join(meta) + "</p>"
+    return html_out
+
+
 def _wps_scan_rows():
     """Parse the last ``kestrel wps scan`` output (wash) into
     ``[{bssid, channel, info}]`` for the /wps table -- best-effort, one row per
@@ -3182,10 +3263,8 @@ def _render_wps(daemon, control=None, message=None, error=False,
         state_html = ('<p class="count">Scanning for WPS access points — ' + when
                       + "… this page updates on its own.</p>")
     elif word == "attacking":
-        loot = '<a href="' + _esc(_url("/loot", control)) + '">Loot</a>'
-        state_html = ('<p class="count">Attacking ' + _esc(target or "an AP")
-                      + "… reaver can take many minutes; the key lands on " + loot
-                      + " if it succeeds. This page updates on its own.</p>")
+        prog, fresh = _wps_progress()
+        state_html = _wps_attack_card(target, control, prog, fresh)
     else:
         state_html = ""
 

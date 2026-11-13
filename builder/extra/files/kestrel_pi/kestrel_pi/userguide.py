@@ -374,7 +374,7 @@ Many home routers leave **WPS** on, and a WPS access point can be made to hand o
 
 It uses the **capture dongle** (not the Pi's built-in Wi-Fi) and **pauses capture** while it runs — one radio, one job at a time. There is no always-on service; it only does something when you run it.
 
-From the dashboard (with the login on): the **WPS attacks** card (→ *WPS attacks* page) has a **Scan for WPS APs** button; the results list each WPS AP with an **Attack** button beside it (first attack asks the acknowledgment). While a scan or attack is running the page shows a **Stop** button (and refreshes itself); Stop cancels the run, puts the dongle back and clears the state. A recovered key lands on the Loot page. From the terminal:
+From the dashboard (with the login on): the **WPS attacks** card (→ *WPS attacks* page) has a **Scan for WPS APs** button; the results list each WPS AP with an **Attack** button beside it (first attack asks the acknowledgment). While an attack runs the page shows a **live readout** — what reaver is doing (waiting, associating, trying PINs, Pixie-Dust), how far through the PIN space it is, and the elapsed time — so a long run is no longer a silent "please wait". It refreshes on its own, and a **Stop** button cancels the run, puts the dongle back and clears the state. The recovered key itself is never shown here — it lands on the Loot page. Over SSH `sudo kestrel wps attack` now streams reaver's output live too. From the terminal:
 
 ```bash
 sudo kestrel wps scan                      # find WPS-enabled APs nearby

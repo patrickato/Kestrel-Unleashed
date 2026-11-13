@@ -5,6 +5,7 @@ These exercise the two pieces that have no Flask/werkzeug dependency: the pure
 through ``str.format``) and ``WebServer`` with an injected server factory (so
 the bind/rebind logic is tested without opening real sockets)."""
 
+import json
 import logging
 import threading
 import time
@@ -1016,6 +1017,51 @@ def test_wps_attack_with_ack_applies_the_upper_cased_bssid(monkeypatch, tmp_path
     assert resp.status_code == 200
     assert sent == [{"target": "wps", "action": "attack",
                      "bssid": "AA:BB:CC:DD:EE:FF", "ack": True}]
+
+
+def _wps_attacking(monkeypatch, tmp_path, progress):
+    """Put the /wps page in the 'attacking' state with a given live-progress
+    record (or None for no progress file)."""
+    state = tmp_path / "wps-state"
+    state.write_text("attacking AA:BB:CC:DD:EE:FF\n")
+    monkeypatch.setattr(web, "WPS_STATE_FILE", str(state))
+    prog_file = tmp_path / "attack-progress.json"
+    if progress is not None:
+        prog_file.write_text(json.dumps(progress))
+    monkeypatch.setattr(web, "WPS_PROGRESS_FILE", str(prog_file))
+
+
+def test_wps_attack_shows_live_progress(monkeypatch, tmp_path):
+    _wps_attacking(monkeypatch, tmp_path, {
+        "bssid": "AA:BB:CC:DD:EE:FF", "essid": "HomeNet", "stage": "pin-brute",
+        "percent": 42.5, "rate": "3 s/pin", "associated": True,
+        "last": "[+] Trying pin ####", "started_at": time.time() - 12,
+        "done": False, "updated_at": time.time()})
+    client, _ = _client(monkeypatch, tmp_path, BASIC)
+    body = client.get("/wps", headers=_basic()).get_data(as_text=True)
+    assert "trying WPS PINs" in body and "42.5%" in body   # live detail overlaid
+    assert "3 s/pin" in body and "elapsed" in body
+    assert "location.reload" in body                       # self-refresh while busy
+
+
+def test_wps_attack_stale_progress_falls_back(monkeypatch, tmp_path):
+    # a quiet beacon-wait (stale file) must not hide the running attack
+    _wps_attacking(monkeypatch, tmp_path, {
+        "stage": "pin-brute", "percent": 10.0, "started_at": time.time() - 300,
+        "done": False, "updated_at": time.time() - 300})
+    client, _ = _client(monkeypatch, tmp_path, BASIC)
+    body = client.get("/wps", headers=_basic()).get_data(as_text=True)
+    assert "Attacking AA:BB:CC:DD:EE:FF" in body and "reaver is working" in body
+    assert "10.0%" not in body                              # stale detail dropped
+
+
+def test_wps_attack_done_shows_outcome(monkeypatch, tmp_path):
+    _wps_attacking(monkeypatch, tmp_path, {
+        "bssid": "AA:BB:CC:DD:EE:FF", "stage": "recovered", "done": True,
+        "outcome": "recovered", "updated_at": time.time()})
+    client, _ = _client(monkeypatch, tmp_path, BASIC)
+    body = client.get("/wps", headers=_basic()).get_data(as_text=True)
+    assert "Recovered a key" in body and 'href="/loot"' in body
 
 
 # -- evil-portal page (/portal) -----------------------------------------------

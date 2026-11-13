@@ -601,6 +601,38 @@ the code default on an in-place update (operator config is skipped); lower
 `[web] refresh_seconds` on the device for a fully live screen. Tests: +1; 1060
 pass, lint clean.
 
+### Added: live WPS attack readout (streaming reaver progress)
+A `kestrel wps attack` used to buffer reaver's whole run and print it only on
+exit, so the `/wps` page showed a bare "Attacking …" banner and an SSH session
+showed nothing for minutes-to-hours. The run now **streams**: the CLI pipes
+reaver's `-vv` output through a pi-run live filter (`python -m kestrel_pi.wps
+live`) that echoes it to the console/journal and writes a small, **secret-free**
+`attack-progress.json` — the same pattern as the crack worker's
+`crack-progress.json`.
+
+- `kestrel_pi/wps.py`: new `parse_reaver_progress` (stage — waiting / associated
+  / pin-brute / pixie-dust / rate-limited / recovered / failed — plus percent,
+  rate, lock flag and a **scrubbed** last status line), the `attack-progress.json`
+  read/write/`is_fresh` helpers, the `live_attack` streaming runner (it also does
+  the end-of-run loot record, as pi), and a `live` module entry point. The
+  recovered PIN/PSK is **never** written to the progress file — it goes only to
+  the loot store, so the file stays safe to surface.
+- `/wps` page (`web.py`): the "attacking" state now overlays a live card — what
+  reaver is doing, how far through the PIN space, elapsed time and the latest
+  (scrubbed) line — refreshing on its own, and a terminal outcome with a Loot
+  link when it finishes. A stale/quiet file falls back to a generic "working"
+  line rather than hiding the running attack.
+- `kestrel.sh`: `wps attack` streams through the filter instead of buffering;
+  the WPS state dir is now pi-owned so the filter can write the progress file.
+
+Touched: `wps.py`, `web.py`, `kestrel.sh`, `userguide.py`, tests, changelog,
+`deferred.md` (the live-readout regexes join the on-hardware WPS checklist).
+Release impact: **app-layer-safe** — all changes are the venv package and the
+CLI, which the in-place engine installs; no new packages, config defaults or lib
+scripts. Tests: +9; 1229 pass, 12 skipped, lint clean. (The full scan→attack
+path, live readout included, still awaits a run on real hardware — see
+`deferred.md`.)
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,
