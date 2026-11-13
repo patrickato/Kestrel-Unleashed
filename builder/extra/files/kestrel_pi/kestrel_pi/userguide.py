@@ -426,7 +426,7 @@ sudo kestrel plugins enable gps --set source=serial --set device=/dev/ttyACM0
 
 Run in a terminal, `plugins enable` also walks you through the options (secrets are masked). To change an option later, re-run `plugins enable <name> --set key=value` with the new value (or edit it on the plugin's web config page). Enabling does not require a reboot or even a daemon restart for the common cases. Disable with `sudo kestrel plugins disable <name>`, or the Disable control on the dashboard.
 
-The authorized-use acknowledgment: any plugin that sends data off the device (the `network` capability: `wpa-sec`, `wigle`, `backup`, `remote-train`, `remote-crack`, and `updates`) takes the same explicit authorized-use acknowledgment as capture before it turns on, whether you enable it from the dashboard or the terminal. In a terminal you are prompted; add `--yes` for scripts. The acknowledgment is remembered device-wide, so once you have enabled capture it is silent afterward. Local-only plugins (`memtemp`, `session-stats`, `ups-hat`, `eink`, `map`, `auto-whitelist`, and `gps` reading a local receiver) never need it.
+The authorized-use acknowledgment: any plugin that sends data off the device (the `network` capability: `wpa-sec`, `wigle`, `backup`, `remote-train`, `remote-crack`, and `updates`) takes the same explicit authorized-use acknowledgment as capture before it turns on, whether you enable it from the dashboard or the terminal. In a terminal you are prompted; add `--yes` for scripts. The acknowledgment is remembered device-wide, so once you have enabled capture it is silent afterward. Local-only plugins (`memtemp`, `session-stats`, `ups-hat`, `eink`, `map`, `wardrive`, `auto-whitelist`, and `gps` reading a local receiver) never need it.
 
 Where things live: bundled plugins are in `/usr/local/lib/kestrel/plugins/`; your own overrides go in `/etc/kestrel/plugins/` (a plugin there with the same name takes precedence). Each plugin has a `[plugins.<name>]` table in `config.toml`; prefer the dashboard or the CLI over hand-editing. If a plugin shows an error, `sudo kestrel plugins info <name>` reports its health and `sudo journalctl -u kestrel-daemon` shows why it failed to load. A failed plugin never stops the daemon or the others. A plugin you add must subclass `Plugin` directly and write its declarations (`__options__`, `__capabilities__` and the like) as plain literals, because the device reads them without running the plugin; one that doesn't is listed as `invalid` by `kestrel plugins list` and is not loaded. The older `@plugins.on` decorator style is not supported.
 
@@ -486,6 +486,14 @@ A note on the tile sources: the built-in Satellite and Street basemaps come from
 - Option `tile_url` (default empty): an optional custom basemap as a `{z}/{x}/{y}` URL template (an optional `{s}` expands to `a`/`b`/`c`) — your own tile server, or a provider you are entitled to use (OSM's own URL is `https://tile.openstreetmap.org/{z}/{x}/{y}.png`). It joins the switcher as **Custom** and opens as the default; update the on-map attribution to match whatever you point it at.
 - Option `refresh_seconds` (default `5`, clamped 2–60): how often the open map polls for new captures and your latest position.
 - Option `max_track_points` (default `20000`): the most recent route points the map draws; the device keeps the breadcrumb trimmed so a long drive never grows it without bound.
+
+### wardrive (the scoreboard)
+
+The map's companion: where the map shows you *where*, the scoreboard shows you *how the run went*. It adds up everything caught so far — networks (named ESSIDs) and access points (BSSIDs), how many got a GPS location, the capture-quality breakdown (PMKID / 4-way / both, and how many are "strong" — a confirmed, surely-crackable capture), how many are cracked, and the route distance — into a dashboard card and a **Scoreboard** page. Local-only (it reads the capture store, the GPS sidecars and the loot store and transmits nothing), so no authorized-use acknowledgment; ships disabled.
+
+- Enable: `sudo kestrel plugins enable wardrive`
+- A dashboard card shows the headline numbers (networks, access points, strong material, cracked, mapped, route); the **Scoreboard** button on the Plugins page opens the full breakdown.
+- No options — it reflects whatever capture, `gps` and the cracker have produced.
 
 ### ups-hat (battery readout and auto-shutdown)
 
