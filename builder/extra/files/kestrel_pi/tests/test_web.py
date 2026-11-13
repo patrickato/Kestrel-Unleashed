@@ -1044,15 +1044,19 @@ def test_wps_attack_shows_live_progress(monkeypatch, tmp_path):
     assert "location.reload" in body                       # self-refresh while busy
 
 
-def test_wps_attack_stale_progress_falls_back(monkeypatch, tmp_path):
-    # a quiet beacon-wait (stale file) must not hide the running attack
+def test_wps_attack_stale_progress_keeps_detail(monkeypatch, tmp_path):
+    # a quiet rate-limit backoff (stale file) must keep showing the last-known
+    # stage/percent/elapsed -- not collapse to a bare "working" line
     _wps_attacking(monkeypatch, tmp_path, {
-        "stage": "pin-brute", "percent": 10.0, "started_at": time.time() - 300,
-        "done": False, "updated_at": time.time() - 300})
+        "stage": "rate-limited", "percent": 10.0, "locked": True,
+        "started_at": time.time() - 300, "done": False,
+        "updated_at": time.time() - 300})
     client, _ = _client(monkeypatch, tmp_path, BASIC)
     body = client.get("/wps", headers=_basic()).get_data(as_text=True)
-    assert "Attacking AA:BB:CC:DD:EE:FF" in body and "reaver is working" in body
-    assert "10.0%" not in body                              # stale detail dropped
+    assert "Attacking AA:BB:CC:DD:EE:FF" in body
+    assert "rate-limited" in body and "10.0%" in body      # last-known detail kept
+    assert "AP is rate-limiting WPS" in body and "quiet for a moment" in body
+    assert "reaver is working" not in body                 # no bare fallback
 
 
 def test_wps_attack_done_shows_outcome(monkeypatch, tmp_path):

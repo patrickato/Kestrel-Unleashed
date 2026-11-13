@@ -2299,8 +2299,8 @@ _WPS_STAGE_PHRASE = {
     "waiting": "waiting for the AP's beacon",
     "associated": "associated — starting the WPS exchange",
     "pin-brute": "trying WPS PINs",
-    "pixie-dust": "running the offline Pixie-Dust attack",
-    "rate-limited": "being rate-limited by the AP (backing off)",
+    "pixie-dust": "running the offline Pixie-Dust attack (one shot — no PIN-by-PIN progress)",
+    "rate-limited": "being rate-limited by the AP (backing off — a poor target)",
     "recovered": "recovered a key",
     "failed": "finished — no key (AP locked or not vulnerable)",
     "ended": "stopped",
@@ -2308,9 +2308,12 @@ _WPS_STAGE_PHRASE = {
 
 
 def _wps_attack_card(target, control, progress, fresh):
-    """The live 'attacking …' block for /wps. Uses the reaver readout when it is
-    fresh; otherwise a generic 'working' line driven by the state file, so a
-    quiet beacon-wait doesn't hide the running attack."""
+    """The live 'attacking …' block for /wps. The state file already says an
+    attack is live, so this always shows the last-known reaver detail (stage,
+    elapsed, %/rate, last line) rather than hiding it when the file is briefly
+    stale -- reaver goes silent for ~60s while an AP rate-limits it, and a bare
+    'working' line told the operator nothing. ``fresh`` only adds a 'quiet for a
+    moment' note so a lull doesn't look frozen."""
     loot = '<a href="' + _esc(_url("/loot", control)) + '">Loot</a>'
     prog = progress if isinstance(progress, dict) else {}
     done = bool(prog.get("done"))
@@ -2327,28 +2330,30 @@ def _wps_attack_card(target, control, progress, fresh):
                     + ". Nothing was added to " + loot + ".")
         return '<p class="count">' + body + "</p>"
 
-    phrase = _WPS_STAGE_PHRASE.get(stage, "working") if fresh else "working"
-    pct = prog.get("percent") if fresh else None
+    phrase = _WPS_STAGE_PHRASE.get(stage, "working")
+    pct = prog.get("percent")
     pct_txt = ""
     if isinstance(pct, (int, float)):
-        pct_txt = " (~%.1f%% through the PIN space)" % pct
+        pct_txt = " · ~%.1f%% through the PIN space" % pct
     line = ("Attacking " + _esc(target or "an AP") + " — reaver is "
             + _esc(phrase) + pct_txt + ". reaver can take many minutes; the key "
             "lands on " + loot + " if it succeeds. This page updates on its own.")
     html_out = '<p class="count">' + line + "</p>"
 
+    # Detail is shown whether or not the file is fresh (the attack is live either
+    # way); elapsed is wall-clock from started_at, so it keeps ticking in a lull.
     meta = []
-    if fresh:
-        started = prog.get("started_at")
-        if isinstance(started, (int, float)):
-            secs = max(0, int(time.time() - started))
-            meta.append("elapsed %s" % _fmt_span(secs))
-        if prog.get("rate"):
-            meta.append("rate " + _esc(str(prog["rate"])))
-        if prog.get("last"):
-            meta.append(_esc(str(prog["last"])))
     if prog.get("locked"):
-        meta.insert(0, "AP is rate-limiting WPS")
+        meta.append("AP is rate-limiting WPS")
+    started = prog.get("started_at")
+    if isinstance(started, (int, float)):
+        meta.append("elapsed %s" % _fmt_span(max(0, int(time.time() - started))))
+    if prog.get("rate"):
+        meta.append("rate " + _esc(str(prog["rate"])))
+    if not fresh:
+        meta.append("quiet for a moment")
+    if prog.get("last"):
+        meta.append(_esc(str(prog["last"])))
     if meta:
         html_out += '<p class="smeta">' + " · ".join(meta) + "</p>"
     return html_out
