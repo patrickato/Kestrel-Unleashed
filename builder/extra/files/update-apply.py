@@ -132,8 +132,8 @@ HEALTH_SETTLE = 20
 CONFIG_FILE = "/etc/kestrel/config.toml"
 BACKUP_KEY = "/home/pi/.ssh/id_ed25519"
 # The [plugins.updates] defaults, as in the plugin's __options__.
-DEFAULT_REPO = "aluminum-ice/kestrel"
-DEFAULT_HOST = "https://git.3ntropy.io"
+DEFAULT_REPO = "patrickato/Kestrel-Unleashed"
+DEFAULT_HOST = "https://api.github.com"
 MANIFEST_ASSET = "update-manifest.json"
 RELEASES_PAGE = 50
 RELEASES_MAX_PAGES = 2
@@ -970,9 +970,11 @@ def http_fetch(url, token="", timeout=30, limit=MAX_LIST_BYTES, attempts=3):
     """GET ``url`` and parse JSON, with retries for transient errors and a size
     cap. Returns (status, body); body is None for an HTTP error. The token is
     only ever added by the caller for URLs on the configured host."""
-    headers = {"Accept": "application/json", "User-Agent": "kestrel-update"}
+    headers = {"Accept": "application/vnd.github+json",
+               "X-GitHub-Api-Version": "2022-11-28",
+               "User-Agent": "kestrel-update"}
     if token:
-        headers["Authorization"] = "token %s" % token
+        headers["Authorization"] = "Bearer %s" % token
     delay = 2
     for attempt in range(attempts):
         try:
@@ -991,6 +993,18 @@ def http_fetch(url, token="", timeout=30, limit=MAX_LIST_BYTES, attempts=3):
         time.sleep(delay)
         delay *= 2
     return 599, None
+
+
+def clone_base(host):
+    """The git-clone base for an API ``host``. GitHub serves its API at
+    api.github.com but repos are cloned from github.com; GitHub Enterprise serves
+    the API under ``/api/v3`` of the same host it clones from. The returned value
+    is what the CLI clones ``<base>/<repo>.git`` from."""
+    host = (host or "").rstrip("/")
+    if host == "https://api.github.com":
+        return "https://github.com"
+    # GitHub Enterprise: https://HOST/api/v3 -> https://HOST
+    return host.split("/api/", 1)[0]
 
 
 def verify_release(tag, explicit=False, force=False, expect="",
@@ -1023,7 +1037,7 @@ def verify_release(tag, explicit=False, force=False, expect="",
             raise Refused("the release to install changed since it was confirmed "
                           "(confirmed %s, now %s); review the update again"
                           % (expect, tag))
-        api = "%s/api/v1/repos/%s" % (host, repo)
+        api = "%s/repos/%s" % (host, repo)
         timeout = cfg["timeout"]
 
         def get(url, limit=MAX_LIST_BYTES):
@@ -1038,8 +1052,9 @@ def verify_release(tag, explicit=False, force=False, expect="",
             if status == 404 and force:
                 warnings.append("%s is not a published release; its commit can't "
                                 "be pinned" % tag)
-                return {"ok": True, "tag": tag, "commit": "", "host": host,
-                        "repo": repo, "warnings": warnings}
+                return {"ok": True, "tag": tag, "commit": "",
+                        "host": clone_base(host), "repo": repo,
+                        "warnings": warnings}
             raise Refused("%s is not a published release of %s" % (tag, repo))
         if rel.get("draft"):
             raise Refused("%s is a draft release" % tag)
@@ -1081,8 +1096,8 @@ def verify_release(tag, explicit=False, force=False, expect="",
             reason = _gap_reason(api, get, ikey, tkey, installed, tag)
             if reason:
                 refuse(reason)
-        return {"ok": True, "tag": tag, "commit": commit, "host": host,
-                "repo": repo, "warnings": warnings}
+        return {"ok": True, "tag": tag, "commit": commit,
+                "host": clone_base(host), "repo": repo, "warnings": warnings}
     except Refused as exc:
         return {"ok": False, "error": str(exc)}
 
@@ -1107,7 +1122,7 @@ def _gap_reason(api, get, ikey, tkey, installed, tag):
     release's manifest is built against the previous stable one)."""
     releases, complete = [], False
     for page in range(1, RELEASES_MAX_PAGES + 1):
-        status, batch = get("%s/releases?limit=%d&page=%d" % (api, RELEASES_PAGE, page))
+        status, batch = get("%s/releases?per_page=%d&page=%d" % (api, RELEASES_PAGE, page))
         if status >= 400 or not isinstance(batch, list):
             return ("could not read the release list to check the releases "
                     "between %s and %s" % (installed, tag))

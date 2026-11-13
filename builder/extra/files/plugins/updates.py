@@ -2,7 +2,7 @@
 (from the web dashboard) apply an in-place *app-layer* update on demand.
 
 This plugin never updates anything on its own. While enabled it periodically
-asks the release server (the project's Forgejo instance) for the latest
+asks the release server (the project's GitHub repo) for the latest
 release, compares it to the version stamped into the
 image (``/etc/kestrel/version``), and surfaces the result as a dashboard
 card plus a small shared state file. The actual upgrade is a deliberate,
@@ -12,7 +12,7 @@ apply`` helper through the same privileged socket the capture/plugin controls
 use. There is **no** auto-update.
 
 Releases come in two channels, told apart by the tag: a stable ``X.Y.Z`` and a
-beta ``X.Y.Z-beta.N`` (which the Release workflow also flags as a Forgejo
+beta ``X.Y.Z-beta.N`` (which the Release workflow also flags as a GitHub
 pre-release). Only stable releases are offered unless the ``beta`` option is
 on; versions compare by SemVer precedence, so a beta device moves on to the
 final release when it is out.
@@ -29,13 +29,14 @@ Because it reaches the network it declares the ``network`` capability (so
 enabling it takes the authorized-use acknowledgment, like the other networked
 plugins) and ships disabled.
 
-It speaks the Forgejo (Gitea-compatible) release API on ``host``. By default
-it talks to the server unauthenticated, so it only sees **public** releases. To
-update from a private repo (or a private fork), set the optional ``token``
-option to a Forgejo access token: it is stored only in this device's
-config.toml (never in the image or the git repo) and authenticates both the
-release check here and the ``update apply`` clone. It is only ever sent to
-``host``. See docs/developer/updates-setup.md.
+It speaks the GitHub REST releases API on ``host`` (default
+``https://api.github.com``). By default it talks to GitHub unauthenticated, so
+it only sees **public** releases. To update from a private repo, set the
+optional ``token`` option to a GitHub personal-access token (``repo`` scope for
+a private repo): it is stored only in this device's config.toml (never in the
+image or the git repo) and authenticates both the release check here and the
+``update apply`` clone. It is only ever sent to ``host`` (and the matching
+github.com clone host). See docs/developer/updates-setup.md.
 """
 
 from __future__ import annotations
@@ -59,11 +60,11 @@ STATE_FILE = os.path.join(STATE_DIR, "state.json")
 # bypassing the interval throttle. Resolved against STATE_DIR at call time (not
 # frozen into a constant) so tests that repoint STATE_DIR pick it up too.
 CHECK_TRIGGER_NAME = ".check-now"
-# The canonical public repo and the Forgejo server that hosts it; override
-# `repo` (and `host`) for a fork.
-DEFAULT_REPO = "aluminum-ice/kestrel"
-DEFAULT_HOST = "https://git.3ntropy.io"
-# Forgejo caps a page of results at 50 (its max_response_items); the release
+# The canonical public repo and the GitHub API host; override `repo` (and
+# `host`, for GitHub Enterprise) for a fork.
+DEFAULT_REPO = "patrickato/Kestrel-Unleashed"
+DEFAULT_HOST = "https://api.github.com"
+# GitHub caps a page of results at 100; we request 50 per page; the release
 # list reads up to this many pages, i.e. the newest 100 releases.
 RELEASES_PAGE = 50
 RELEASES_MAX_PAGES = 2
@@ -163,7 +164,7 @@ def is_newer(latest, installed):
 
 
 def release_is_prerelease(rel):
-    """True for a release Forgejo flags as a pre-release, or whose tag is a
+    """True for a release GitHub flags as a pre-release, or whose tag is a
     ``-beta.N`` version (so a beta published without the flag still never
     reaches the stable channel)."""
     return bool(rel.get("prerelease")) or is_prerelease(_text(rel.get("tag_name")))
@@ -181,18 +182,19 @@ class Updates(Plugin):
     # a new release now, bypassing its interval throttle (on_webhook, a POST).
     __actions__ = ({"label": "Check", "path": "check", "method": "post"},)
     __options__ = {
-        # Forgejo "owner/repo" to check. Default is the canonical public repo.
+        # GitHub "owner/repo" to check. Default is the canonical public repo.
         # NB: pure string literals, not DEFAULT_REPO/DEFAULT_HOST - the root
         # plugins-ctl helper reads __options__ statically with ast and never
         # imports this module, so a Name reference here would not resolve.
-        "repo": {"type": "str", "default": "aluminum-ice/kestrel"},
-        # The Forgejo (or Gitea) server hosting `repo`, as an https:// URL.
-        "host": {"type": "str", "default": "https://git.3ntropy.io"},
-        # Optional Forgejo access token, for a PRIVATE repo or fork. Empty (the
+        "repo": {"type": "str", "default": "patrickato/Kestrel-Unleashed"},
+        # The GitHub API base, as an https:// URL. Leave the default for
+        # github.com; set it to a GitHub Enterprise API base if you host there.
+        "host": {"type": "str", "default": "https://api.github.com"},
+        # Optional GitHub personal-access token, for a PRIVATE repo. Empty (the
         # default) => unauthenticated requests, public repos only. Stored only
         # in this device's config.toml, never in the image or the git repo;
         # marked secret so the CLI and web never echo it. It needs read-only
-        # "repository" scope. It also authenticates the `update apply` clone.
+        # "repo" scope. It also authenticates the `update apply` clone.
         "token": {"type": "str", "default": "", "secret": True},
         # Opt in to beta (-beta.N pre-release) updates as well as stable ones.
         # Off => only stable releases are offered. Turning it off while on a
@@ -425,17 +427,17 @@ class Updates(Plugin):
             timeout = 30
         beta = self._channel() == "beta"
         # Both channels read the release list and pick the highest version
-        # themselves (Forgejo's /releases/latest goes by date, so a hotfix on an
+        # themselves (GitHub's /releases/latest goes by date, so a hotfix on an
         # older line published later would win); the stable channel skips
         # pre-releases. The same list feeds the notes and the reflash-gap scan.
-        url = "%s/api/v1/repos/%s/releases?limit=%d&page=1" % (host, repo, RELEASES_PAGE)
+        url = self._releases_url(host, repo, 1)
         try:
             status, body = self._get(url, token, timeout)
         except Exception as exc:  # noqa: BLE001 - never let a check break the loop
             self.log.warning("updates: release check failed: %s", exc)
             return False
         if status == 404:
-            # Forgejo also returns 404 for a private repo the caller can't
+            # GitHub also returns 404 for a private repo the caller can't
             # see, so when no token is set say that rather than "no release".
             if token:
                 self.log.info("updates: %s not found on %s", repo, host)
@@ -522,7 +524,7 @@ class Updates(Plugin):
         a network or server error, so a passing failure is retried instead of
         reading as "needs reflash".
 
-        Forgejo serves assets from ``browser_download_url`` (under
+        GitHub serves release assets from ``browser_download_url`` (a public,
         ``releases/download/``), which accepts the same token as the API, so a
         private repo's manifest comes from the same URL with the token added.
         The token is only sent when that URL is on ``host``."""
@@ -547,7 +549,7 @@ class Updates(Plugin):
         """The repo's published releases (newest first, up to 100) and whether
         that is all of them, as ``(releases, complete)``; ``(None, False)`` when
         a page could not be read. Fetched once per check and reused for the
-        "What's new" notes and the reflash-gap scan. Forgejo pages at 50, so this
+        "What's new" notes and the reflash-gap scan. We page at 50, so this
         reads up to RELEASES_MAX_PAGES pages, stopping at the first short one.
         ``first`` is page 1 when the caller already has it."""
         host = self._host()
@@ -561,8 +563,7 @@ class Updates(Plugin):
                 return releases, True
             start = 2
         for page in range(start, RELEASES_MAX_PAGES + 1):
-            url = "%s/api/v1/repos/%s/releases?limit=%d&page=%d" % (
-                host, repo, RELEASES_PAGE, page)
+            url = self._releases_url(host, repo, page)
             try:
                 status, batch = self._get(url, token, timeout)
             except Exception as exc:  # noqa: BLE001
@@ -578,7 +579,7 @@ class Updates(Plugin):
     @staticmethod
     def _newest_release(releases, include_prereleases=False):
         """The highest-versioned published release, or None; betas only when
-        ``include_prereleases``. Picked by version, not list order: Forgejo
+        ``include_prereleases``. Picked by version, not list order: GitHub
         lists by creation date, so a hotfix cut after a newer release would
         otherwise outrank it."""
         best, best_key = None, None
@@ -600,11 +601,18 @@ class Updates(Plugin):
         return host if host.startswith("https://") else ""
 
     @staticmethod
+    def _releases_url(host, repo, page):
+        """The GitHub releases-list endpoint for one page."""
+        return "%s/repos/%s/releases?per_page=%d&page=%d" % (
+            host, repo, RELEASES_PAGE, page)
+
+    @staticmethod
     def _headers(token=""):
-        headers = {"Accept": "application/json",
+        headers = {"Accept": "application/vnd.github+json",
+                   "X-GitHub-Api-Version": "2022-11-28",
                    "User-Agent": "kestrel-updates"}
         if token:
-            headers["Authorization"] = "token %s" % token
+            headers["Authorization"] = "Bearer %s" % token
         return headers
 
     def _notes_from_releases(self, releases, installed, latest,

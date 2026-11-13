@@ -2782,8 +2782,9 @@ cmd_update_apply() {
     trap 'rm -rf "$tmp"' EXIT INT TERM
     log "fetching $repo @ $tag from $host ..."
     # For a private repo, a token (from [plugins.updates] token) authenticates
-    # the clone, as a Basic auth header (Forgejo takes the token as the
-    # password) scoped to $host. It goes in through git's GIT_CONFIG_* environment
+    # the clone, as a Basic auth header (GitHub takes the token as the Basic
+    # password, with x-access-token as the user) scoped to $host (github.com).
+    # It goes in through git's GIT_CONFIG_* environment
     # rather than a -c argument, so it is never in a process command line other
     # local users can read, nor in the clone's .git/config. No token => an
     # ordinary anonymous clone of a public repo.

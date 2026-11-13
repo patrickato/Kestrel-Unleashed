@@ -328,13 +328,14 @@ def test_hooks_only_nudge_the_worker(tmp_path):
     assert hit["tick"] == 0                                  # no check inline
 
 
-# -- Forgejo API, private-repo token auth -----------------------------------
-HOST = "https://git.3ntropy.io"
+# -- GitHub API, private-repo token auth ------------------------------------
+HOST = "https://api.github.com"
 
 
 def _release_on_host(tag, host=HOST):
-    """A release whose manifest is served from the Forgejo host, as Forgejo
-    reports it (assets only carry a browser_download_url)."""
+    """A release as GitHub reports it (assets carry a browser_download_url).
+    The synthetic manifest sits on the same host so the token-scope test can
+    exercise the on-host rule; real GitHub assets are off the API host."""
     return {
         "tag_name": tag,
         "html_url": "%s/o/r/releases/tag/%s" % (host, tag),
@@ -355,7 +356,7 @@ def _recording_get(calls, release, manifest, releases=None):
     return fake_get
 
 
-def test_check_uses_the_forgejo_api_on_the_default_host(tmp_path, monkeypatch):
+def test_check_uses_the_github_api_on_the_default_host(tmp_path, monkeypatch):
     import requests
 
     mod = _load()
@@ -368,16 +369,17 @@ def test_check_uses_the_forgejo_api_on_the_default_host(tmp_path, monkeypatch):
 
     # Both channels read the release list (not /releases/latest, which goes
     # by date) and pick the highest version.
-    assert calls[0][0] == HOST + "/api/v1/repos/o/r/releases?limit=50&page=1"
+    assert calls[0][0] == HOST + "/repos/o/r/releases?per_page=50&page=1"
     state = json.load(open(mod.STATE_FILE))
     assert state["host"] == HOST
     assert state["offerable"] is True
 
 
 def test_token_authenticates_release_and_manifest(tmp_path, monkeypatch):
-    # With a token set, every request to the host carries it, including the
-    # manifest download from releases/download/ (Forgejo accepts the API token
-    # there, so there is no separate asset API URL as on GitHub).
+    # With a token set, every request to the API host carries it as a Bearer
+    # header. (On real GitHub the public asset download is off the API host and
+    # needs no token; this synthetic manifest sits on the host to exercise the
+    # on-host token rule.)
     import requests
 
     mod = _load()
@@ -389,7 +391,7 @@ def test_token_authenticates_release_and_manifest(tmp_path, monkeypatch):
     plugin._last_check = None
     plugin._check()
 
-    assert calls and all(c[1].get("Authorization") == "token TKN" for c in calls)
+    assert calls and all(c[1].get("Authorization") == "Bearer TKN" for c in calls)
     assert any("/releases/download/0.4.2/" in c[0] for c in calls)
     state = json.load(open(mod.STATE_FILE))
     assert state["offerable"] is True
@@ -434,14 +436,14 @@ def test_a_custom_host_is_used_and_normalised(tmp_path, monkeypatch):
 
     mod = _load()
     plugin = _plugin(tmp_path, mod, installed="0.4.2", online=False)
-    plugin.options["host"] = "https://forgejo.example.org/"
+    plugin.options["host"] = "https://ghe.example.org/api/v3/"
     calls = []
     monkeypatch.setattr(requests, "get", _recording_get(
-        calls, _release_on_host("0.4.2", host="https://forgejo.example.org"), None))
+        calls, _release_on_host("0.4.2", host="https://ghe.example.org/api/v3"), None))
     plugin._last_check = None
     plugin._check()
-    assert calls[0][0] == ("https://forgejo.example.org/api/v1/repos/o/r/"
-                           "releases?limit=50&page=1")
+    assert calls[0][0] == ("https://ghe.example.org/api/v3/repos/o/r/"
+                           "releases?per_page=50&page=1")
 
 
 def test_a_non_https_host_is_never_contacted(tmp_path, monkeypatch):
@@ -450,7 +452,7 @@ def test_a_non_https_host_is_never_contacted(tmp_path, monkeypatch):
 
     mod = _load()
     plugin = _plugin(tmp_path, mod, installed="0.4.1", online=False)
-    plugin.options["host"] = "http://forgejo.example.org"
+    plugin.options["host"] = "http://ghe.example.org"
     plugin.options["token"] = "TKN"
     calls = []
     monkeypatch.setattr(requests, "get", lambda url, **k: calls.append(url))
@@ -460,7 +462,7 @@ def test_a_non_https_host_is_never_contacted(tmp_path, monkeypatch):
 
 
 def test_release_list_reads_a_second_page(tmp_path, monkeypatch):
-    # Forgejo pages at 50: a full first page means there may be more.
+    # We page at 50 (GitHub caps at 100): a full first page means there may be more.
     import requests
 
     mod = _load()
@@ -832,7 +834,7 @@ def _channel_get(releases, manifests):
 
 
 def _beta_rel(tag, **extra):
-    """A release as Forgejo lists it, flagged a pre-release when it is a beta."""
+    """A release as GitHub lists it, flagged a pre-release when it is a beta."""
     rel = _rel_manifest_url(tag)
     rel["prerelease"] = "-beta." in tag
     rel.update(extra)
@@ -854,7 +856,7 @@ def test_stable_channel_never_offers_a_beta(tmp_path, monkeypatch):
     state = json.load(open(mod.STATE_FILE))
     assert state["update_available"] is False
     assert state["channel"] == "stable"
-    assert "/releases?limit=50&page=1" in calls[0]
+    assert "/releases?per_page=50&page=1" in calls[0]
 
 
 def test_beta_channel_offers_the_highest_version(tmp_path, monkeypatch):
@@ -873,7 +875,7 @@ def test_beta_channel_offers_the_highest_version(tmp_path, monkeypatch):
     monkeypatch.setattr(requests, "get", fake)
     plugin._check()
 
-    assert "/releases?limit=50&page=1" in calls[0]
+    assert "/releases?per_page=50&page=1" in calls[0]
     state = json.load(open(mod.STATE_FILE))
     assert state["latest"] == "0.7.0-beta.1"
     assert state["prerelease"] is True and state["channel"] == "beta"

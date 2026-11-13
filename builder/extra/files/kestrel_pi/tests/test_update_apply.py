@@ -734,6 +734,23 @@ def test_verify_accepts_a_newer_app_layer_release(tmp_path):
         "0.6.6", SHA, FORGE, "o/r")
 
 
+def test_clone_base_maps_github_api_host_to_the_git_host():
+    # The API lives at api.github.com but repos clone from github.com; the shell
+    # clones <returned host>/<repo>.git, so the returned host must be the git one.
+    assert ua.clone_base("https://api.github.com") == "https://github.com"
+    assert ua.clone_base("https://api.github.com/") == "https://github.com"
+    # GitHub Enterprise serves the API under /api/v3 of the clone host.
+    assert ua.clone_base("https://ghe.example.org/api/v3") == "https://ghe.example.org"
+    # a bare host (no /api/) is its own clone base
+    assert ua.clone_base("https://forge.test") == "https://forge.test"
+
+
+def test_verify_returns_the_github_clone_host(tmp_path):
+    out = _verify(tmp_path, "0.6.6", [_rel("0.6.6"), _rel("0.6.5")],
+                  {"0.6.6": _app()}, cfg={"host": "https://api.github.com"})
+    assert out["ok"] is True and out["host"] == "https://github.com"
+
+
 def test_verify_sends_the_token_only_to_the_configured_host(tmp_path):
     calls = []
     out = _verify(tmp_path, "0.6.6",

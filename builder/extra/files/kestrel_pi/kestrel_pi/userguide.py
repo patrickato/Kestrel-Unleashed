@@ -732,21 +732,20 @@ Releases are stable (`1.2.3`) or beta (`1.3.0-beta.1`). Only stable releases are
 
 ### Updating from a private repo
 
-The default repo is public, so the plugin reads its releases with no credentials. If you run kestrel from a private repo or fork, the plugin has to authenticate, so it needs a Forgejo access token. The token authenticates all three steps that touch the repo: the release check, the manifest download, and the clone the update performs.
+The default repo is public, so the plugin reads its GitHub releases with no credentials. If you run kestrel from a private repo or fork, the plugin has to authenticate, so it needs a GitHub personal-access token. The token authenticates the two steps that touch the repo over the API — the release check and (on a private repo) the manifest — and the clone the update performs.
 
-The token is yours and lives only on the device, in `config.toml` (root-owned, device-only), masked everywhere and never shown back. It is never committed and never baked into the image. Scope it as narrowly as possible: create it in Forgejo under Settings → Applications with only the **repository: Read** permission. It is only ever sent to the configured `host`.
+The token is yours and lives only on the device, in `config.toml` (root-owned, device-only), masked everywhere and never shown back. It is never committed and never baked into the image. Scope it as narrowly as possible: create it on GitHub under Settings → Developer settings → Personal access tokens with only read access to the one repo (`repo` scope on a classic token, or read-only Contents on a fine-grained token). It is only ever sent to the configured `host` and the matching github.com clone host.
 
 Set the repo and token from the `updates` plugin's web config page (with the login on), where you can type the token in directly; or from the terminal:
 
 ```bash
-# set the token (and the repo/host if your fork lives elsewhere):
+# point at your fork and set the token:
 sudo kestrel plugins enable updates --set repo=you/your-repo --set token=xxx
-sudo kestrel plugins enable updates --set host=https://forgejo.example.org
 # go back to a public repo:
 sudo kestrel plugins enable updates --set token=
 ```
 
-Keys under `[plugins.updates]`: `enabled` (default `false`), `repo` (the project's public repo by default; override for a fork), `host` (the Forgejo or Gitea server hosting `repo`, `https://` only; the project's server by default), `token` (default empty; masked secret), `check_interval_seconds` (default `21600`), `timeout` (default `30`), `beta` (default `false`; also offer beta releases). A wrong or expired token shows as an HTTP 401/403 from the server in the daemon log.
+Keys under `[plugins.updates]`: `enabled` (default `false`), `repo` (the project's public GitHub repo by default; override for a fork), `host` (the GitHub API base, default `https://api.github.com`; set a GitHub Enterprise API base like `https://ghe.example.org/api/v3` only if you host there), `token` (default empty; masked secret), `check_interval_seconds` (default `21600`), `timeout` (default `30`), `beta` (default `false`; also offer beta releases). A wrong or expired token shows as an HTTP 401/403 from GitHub in the daemon log.
 
 ### If you get locked out after an update
 
