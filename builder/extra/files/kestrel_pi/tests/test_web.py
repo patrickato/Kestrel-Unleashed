@@ -756,17 +756,21 @@ class _FakeLoader:
 
 class _FakeCapture:
     def __init__(self, networks, access_points=None, hashline_files=None,
-                 bssid_files=None):
+                 bssid_files=None, quality=None):
         self._networks = networks
         self._access_points = access_points or []
         self._hashline_files = hashline_files or []
         self._bssid_files = bssid_files or {}
+        self._quality = quality or {}
 
     def captured_networks(self):
         return self._networks
 
     def captured_access_points(self):
         return self._access_points
+
+    def access_point_quality(self):
+        return self._quality
 
     def hashline_files(self):
         return list(self._hashline_files)
@@ -778,7 +782,7 @@ class _FakeCapture:
 class _FakeDaemon:
     def __init__(self, web_cfg, plugin_table, networks=None,
                  access_points=None, output_mode=None, crack=None,
-                 hashline_files=None, bssid_files=None):
+                 hashline_files=None, bssid_files=None, quality=None):
         import logging
         from kestrel_pi.loader import PluginRecord
 
@@ -795,7 +799,7 @@ class _FakeDaemon:
             self.config["crack"] = crack
         self.capture = _FakeCapture(networks or [], access_points,
                                     hashline_files=hashline_files,
-                                    bssid_files=bssid_files)
+                                    bssid_files=bssid_files, quality=quality)
 
     def _fresh_config(self):
         return self.config
@@ -817,7 +821,7 @@ def _basic(user="pi", password="hunter2"):
 
 def _client(monkeypatch, tmp_path, web_cfg, table=None, replies=None, networks=None,
             access_points=None, output_mode=None, crack=None, hashline_files=None,
-            bssid_files=None):
+            bssid_files=None, quality=None):
     pytest.importorskip("flask")
     sent = []
 
@@ -835,7 +839,8 @@ def _client(monkeypatch, tmp_path, web_cfg, table=None, replies=None, networks=N
     daemon = _FakeDaemon(web_cfg, table if table is not None else {"enabled": False},
                          networks=networks, access_points=access_points,
                          output_mode=output_mode, crack=crack,
-                         hashline_files=hashline_files, bssid_files=bssid_files)
+                         hashline_files=hashline_files, bssid_files=bssid_files,
+                         quality=quality)
     return web.create_app(daemon).test_client(), sent
 
 
@@ -1866,6 +1871,24 @@ def test_networks_ap_unknown_bssid_row(monkeypatch, tmp_path):
     assert "(unknown BSSID)" in body
 
 
+def test_networks_ap_view_shows_quality_badge(monkeypatch, tmp_path):
+    # The by-access-point view shows each AP's capture-quality badge, with the
+    # label text carrying the meaning (not colour alone).
+    from kestrel_pi import capture_quality as cq
+    client, _ = _client(
+        monkeypatch, tmp_path, {"auth": "none"}, output_mode="per-ap",
+        access_points=_aps(("solidnet", "AA:BB:CC:00:00:01"),
+                           ("weaknet", "AA:BB:CC:00:00:02")),
+        quality={
+            "AA:BB:CC:00:00:01": cq.from_signals(1, 1, True),   # PMKID + 4-way
+            "AA:BB:CC:00:00:02": cq.from_signals(0, 1, False),  # lone 4-way
+        })
+    body = client.get("/networks").get_data(as_text=True)
+    assert "<th>quality</th>" in body
+    assert "PMKID + 4-way" in body and "4-way" in body
+    assert "p-qbest" in body and "p-qok" in body
+
+
 def test_dashboard_navcard_shows_network_and_ap_counts(monkeypatch, tmp_path):
     html = web._render_status(_status([]))
     assert "12 network(s)" in html and "19 AP(s)" in html
@@ -2785,6 +2808,9 @@ def _loot_daemon(tmp_path, wl_dir, cap_dir, capfile, crack_enabled=True):
 
         def captured_access_points(self):
             return []
+
+        def access_point_quality(self):
+            return {}
 
     class _Daemon:
         def __init__(self):

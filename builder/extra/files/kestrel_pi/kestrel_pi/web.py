@@ -612,6 +612,16 @@ def create_app(daemon):
             view = "ap" if mode == "per-ap" else "ssid"
         if view == "ap":
             data = daemon.capture.captured_access_points()
+            # Attach each AP's capture-quality grade (PMKID / 4-way / both) for
+            # the badge column, so the operator sees which targets hold strong,
+            # crackable material at a glance. One extra store pass, ap-view only.
+            quality = daemon.capture.access_point_quality()
+            for row in data:
+                q = quality.get(row.get("bssid"))
+                if q is not None:
+                    row["quality"] = q.grade
+                    row["quality_label"] = q.label
+                    row["quality_note"] = q.note
         else:
             data = daemon.capture.captured_networks()
         sort = "recent" if request.args.get("sort") == "recent" else "name"
@@ -1527,6 +1537,12 @@ _STATUS_CSS = (
     # No-handshake is a neutral "waiting" state, not an error, so it is muted
     # rather than red.
     ".pill.p-no-handshake{background:var(--off-bg);color:var(--muted);}"
+    # Capture-quality badges (by-access-point view). The label text is the signal
+    # ("PMKID + 4-way", "4-way"); these only supplement it with the same status
+    # palette -- strongest material green, a lone 4-way neutral.
+    ".pill.p-qbest{background:var(--on-bg);border-color:var(--on-bd);}"
+    ".pill.p-qgood{background:var(--on-bg);}"
+    ".pill.p-qok{background:var(--off-bg);}"
     ".picklist{max-height:16em;overflow:auto;border:1px solid var(--border);"
     "border-radius:8px;padding:.4em .7em;margin:.4em 0;background:var(--card);}"
     ".pick{display:block;font-weight:400;margin:.2em 0;}"
@@ -3586,6 +3602,10 @@ def _ago(epoch, now=None):
     return time.strftime("%Y-%m-%d", time.localtime(epoch))
 
 
+# capture-quality grade -> pill CSS modifier (see the .p-q* rules in _STATUS_CSS).
+_Q_PILL = {"pmkid+handshake": "best", "pmkid": "good", "handshake": "ok"}
+
+
 def _render_networks(rows_in, control=None, query="", page=1,
                      per_page=NETWORKS_PER_PAGE, view="ssid", sort="name"):
     """The captured-networks page, in one of two views over the same store:
@@ -3647,11 +3667,20 @@ def _render_networks(rows_in, control=None, query="", page=1,
             bssid = r.get("bssid") or ""
             cell = (_esc(bssid) if bssid
                     else '<span class="smeta">(unknown BSSID)</span>')
+            qgrade = r.get("quality")
+            qlabel = r.get("quality_label")
+            if qgrade and qgrade != "none" and qlabel:
+                qcell = ('<span class="pill p-q' + _Q_PILL.get(qgrade, "ok")
+                         + '" title="' + _esc(r.get("quality_note") or "")
+                         + '">' + _esc(qlabel) + "</span>")
+            else:
+                qcell = '<span class="smeta">&mdash;</span>'
             rows.append(
                 "<tr><td data-label=\"network\">" + name + "</td>"
                 "<td data-label=\"bssid\">" + cell + "</td>"
                 "<td data-label=\"handshakes\">" + _esc(r.get("handshakes", 0))
-                + "</td>" + seen_cell + "</tr>"
+                + "</td><td data-label=\"quality\">" + qcell + "</td>"
+                + seen_cell + "</tr>"
             )
         else:
             rows.append(
@@ -3660,7 +3689,7 @@ def _render_networks(rows_in, control=None, query="", page=1,
                 "<td data-label=\"handshakes\">" + _esc(r.get("handshakes", 0))
                 + "</td>" + seen_cell + "</tr>"
             )
-    cols = 4
+    cols = 5 if ap_view else 4
     body_rows = "".join(rows) or (
         "<tr><td colspan='" + str(cols) + "'>"
         + (("no %ss match that search" % noun) if needle
@@ -3751,7 +3780,7 @@ def _render_networks(rows_in, control=None, query="", page=1,
     if ap_view:
         heading = "Captured access points"
         head_cells = ("<th>network</th><th>BSSID</th><th>handshakes</th>"
-                      "<th>last seen</th>")
+                      "<th>quality</th><th>last seen</th>")
     else:
         heading = "Captured networks"
         head_cells = ("<th>network</th><th>bssids</th><th>handshakes</th>"

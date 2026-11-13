@@ -17,6 +17,8 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+from . import capture_quality
+
 # The best-effort "what's in range" file the collector writes into the store
 # (contract_version 3). Read by the daemon for the Environment readout; absent,
 # unreadable, stale, or not-scanning all mean "unknown".
@@ -335,6 +337,34 @@ class CaptureInterface:
         if unknown:
             out.append({"essid": "", "bssid": "", "handshakes": unknown,
                         "last_seen": None})
+        return out
+
+    def access_point_quality(self):
+        """``{bssid: capture_quality.Quality}`` across the store: how crackable
+        each AP's captured material is (PMKID vs 4-way, AP-confirmed or not). A
+        single pass over the hashlines, kept separate from the cached count parse
+        so the proven :meth:`_parse_store` path is untouched; the by-access-point
+        page and any quality-aware ordering read this. BSSID-less lines are
+        ignored (they can't be attributed to an AP)."""
+        pmkid = {}
+        handshake = {}
+        confirmed = {}
+        for path in self.hashline_files():
+            for event in self.read_events(path):
+                if not event.bssid:
+                    continue
+                sig = capture_quality.signal(event.raw)
+                if sig.kind == "pmkid":
+                    pmkid[event.bssid] = pmkid.get(event.bssid, 0) + 1
+                elif sig.kind == "eapol":
+                    handshake[event.bssid] = handshake.get(event.bssid, 0) + 1
+                    if sig.ap_confirmed:
+                        confirmed[event.bssid] = True
+        out = {}
+        for bssid in set(pmkid) | set(handshake):
+            out[bssid] = capture_quality.from_signals(
+                pmkid.get(bssid, 0), handshake.get(bssid, 0),
+                confirmed.get(bssid, False))
         return out
 
     def capture_counts(self):
