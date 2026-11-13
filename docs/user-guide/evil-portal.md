@@ -98,9 +98,31 @@ dhcp_end   = "10.0.0.250"
 packages, which the in-field app-layer update engine does not install — it ships
 on a freshly flashed image, not an in-place update.
 
-## Not yet validated on hardware
+## Troubleshooting: the sign-in sheet never appears
 
-The AP/DHCP/DNS/redirect orchestration (`evil-portal-launch`) is implemented and
-the portal server's routing, templates and capture store are unit-tested, but
-the full path has **not** been run end-to-end on a Pi with the dongle in AP
-mode. See `docs/developer/deferred.md`.
+If a phone joins the SSID and gets an IP but no captive "Sign in" sheet pops
+(and nothing is captured), work down this list — the AP and DHCP are usually
+fine; the break is in the captive **probe** reaching the portal:
+
+1. **Watch the portal's own log.** It now logs every request it serves:
+   `journalctl -u kestrel-evil-portal.service -f`. Join from the phone and watch.
+   - **You see `GET /generate_204 ... (captive probe)` lines** → the portal is
+     reached; if the sheet still doesn't pop, it's the client's captive
+     detection (next point). Open any `http://` site in the phone's browser; it
+     redirects to the portal, and a submit is captured.
+   - **You see nothing** → the probe never reached the portal (DNS/redirect),
+     almost always **Private DNS** (next point).
+2. **Turn off Private DNS on the test phone.** Modern Android/Samsung defaults
+   Private DNS to *Automatic* (DoT to an external resolver), which bypasses the
+   portal's DNS entirely so the captive check never resolves to the portal.
+   Set **Settings → Connections → More connection settings → Private DNS → Off**
+   and rejoin. (This is a client setting, not something the device controls.)
+3. **Prove the server + redirect on the Pi itself**, independent of any phone,
+   while the portal is running:
+   ```
+   curl -s -o /dev/null -w 'server %{http_code}\n' http://127.0.0.1:8880/generate_204
+   curl -s -o /dev/null -w 'redirect %{http_code}\n' http://10.0.0.1/generate_204
+   ```
+   Both should print `200`. `server` failing means the portal didn't bind;
+   `redirect` failing (when `server` works) means the `:80 → :8880` iptables
+   REDIRECT isn't in place.

