@@ -154,45 +154,35 @@ How to use this file:
   or generate candidates and stream them into `aircrack-ng -w -`. For complex
   masks, extend `aircrack.mask_to_crunch` to emit `crunch -t <template>` with
   per-position charsets, or stream a generator. For PMKID (and rules/masks in one
-  tool), John the Ripper **jumbo** cracks PMKID and EAPOL on CPU natively — it
-  needs a from-source build in the image (no compiler ships today), or a
-  prebuilt arm64 binary vendored in. That would also let a `no-handshake` AP's
-  PMKID be cracked directly.
+  tool), John the Ripper **jumbo** cracks PMKID and EAPOL on CPU natively and now
+  ships in the image (built from source for arm64), so `engine = auto` already
+  uses it for the stored backlog, PMKID included.
 - **Pick up when:** an operator needs rules, PMKID cracking, or a device-default
   attack needs a mask crunch can't express simply.
 
 ## John the Ripper on-device engine (`[crack] engine`)
 
-### Install the jumbo John binary on the image (the reflash step)
+### Drop the build toolchain from the image (prebuilt John artifact)
 
-- **What:** the on-device crack worker now supports a **John the Ripper** engine
-  (`kestrel_pi/crack/john.py`, selected by `[crack] engine = auto|john|aircrack`).
-  Unlike aircrack-ng it reads the `.hc22000` store **directly** — EAPOL **and**
-  PMKID, with a rule engine — so it cracks the stored backlog on CPU with no
-  packet capture. Both conversions (PMKID → John's wpapsk line; EAPOL → `hccapx`
-  → `hccapx2john.py` → John) were proven end to end (John recovers the known
-  passphrase). The engine code, worker wiring, config key and tests are **in**;
-  what is missing is the **jumbo `john` binary on the image**.
-- **Why deferred:** Debian/RPiOS bookworm's stock `john` (1.9.0-2) is the **core**
-  build — no `wpapsk` format and none of the `*2john` tools — so `apt install
-  john` does not suffice. The jumbo build must be compiled for arm64, and neither
-  CI nor a cloud session has an arm64 toolchain or runs the image build, so it
-  can't be built or validated here. Until it lands, `engine = auto` correctly
-  falls back to aircrack-ng (`have_john()` requires the jumbo marker
-  `hccapx2john.py`, so a stray core `john` is never picked).
-- **What to do:** build john **jumbo** for arm64 (clone a pinned
-  `openwall/john` commit, `cd src && ./configure && make -sj`) on an arm64 Pi or
-  builder, and install the `run/` tree so `john`, `hccapx2john.py` and
-  `wpapcap2john` land **together** on a dir on `PATH` (co-location is what
-  `find_hccapx2john()` keys on) plus John's `*.conf` data. Prefer a prebuilt
-  arm64 artifact vendored like the Waveshare driver, or an in-image source build
-  with build deps added and removed in the same play (heavy under QEMU). Then on
-  a device: `kestrel crack status` shows `engine john`; queue a stored PMKID and
-  an EAPOL network and confirm each cracks and lands on `/loot`; confirm `kestrel
-  crack watch` shows John's live progress. **Reflash-class** (new binary + its
-  data files).
-- **Pick up when:** the next reflash / hardware pass — pair it with the WPS and
-  evil-portal hardware validations.
+- **What:** jumbo John is compiled from source in the image chroot (the
+  `packages.john` block in `builder/config.yml`). That pulls `build-essential`
+  into the shipped image (~hundreds of MB) and makes the compile the slowest step
+  of the build (it runs under QEMU). Both are avoidable.
+- **Why deferred:** the in-chroot build is self-contained (nothing to host) and
+  mirrors the recipe already proven on a real Pi 5, so it was the lowest-risk way
+  to actually ship John first. Removing the toolchain cleanly (without `apt
+  autoremove` pulling stock Raspberry Pi packages) and hosting a prebuilt binary
+  are both extra moving parts.
+- **What to do:** build the jumbo `run/` tree for arm64 once (a native Pi or a
+  GitHub `ubuntu-24.04-arm` runner), publish it as a checksummed `.tar.gz`
+  release asset, and fetch + extract it in the playbook exactly like
+  `packages.angryoxide` (set `packages.john.commit: ""` to skip the source
+  build). Keep the same install layout (`prefix` run/ tree + the `john` wrapper
+  and `hccapx2john.py`/`wpapcap2john` PATH symlinks) so `find_hccapx2john()` still
+  resolves. Drop `build-essential`/`libssl-dev`/`libpcap-dev`/`zlib1g-dev` from
+  the build-deps task. **Reflash-class.**
+- **Pick up when:** image size or build time becomes a pain point, or a
+  reproducible hosted artifact is wanted over an in-chroot compile.
 
 ### Crack all uncracked APs in one John run (multi-salt)
 

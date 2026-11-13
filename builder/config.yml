@@ -157,6 +157,23 @@
         archive:  "angryoxide-linux-aarch64-musl.tar.gz"
         checksum: "sha256:63b6eac74d175d03ba6e20976c8b7fd85ede28151b96702c936a270ba77ead88"
         url:      "https://git.3ntropy.io/aluminum-ice/AngryOxide/releases/download"
+      # John the Ripper (jumbo) -- the on-device crack engine's preferred CPU
+      # backend. It cracks PMKID and EAPOL straight from the hashline store (no
+      # packet capture), which aircrack-ng cannot do for PMKID. Debian's stock
+      # `john` is the crippled "core" build (no wpapsk format, no *2john tools),
+      # so the jumbo build is compiled from source for arm64 at image-build time
+      # and installed as a self-contained run/ tree at `prefix`, with a `john`
+      # wrapper + `hccapx2john.py`/`wpapcap2john` symlinks on PATH (the exact
+      # layout kestrel_pi/crack/john.py keys on). Pinned to a bleeding-jumbo
+      # commit for reproducibility. The build is best-effort: a build failure
+      # only warns and the worker falls back to aircrack-ng; set `commit: ""` to
+      # skip the build entirely. (The compile runs under QEMU, so it is slow and
+      # leaves a toolchain in the image -- a future option is a prebuilt arm64
+      # artifact fetched like angryoxide; see docs/developer/deferred.md.)
+      john:
+        repo:   "https://github.com/openwall/john"
+        commit: "37bebbe4b6442c8dd3888e5848ef062c0783e9f3"
+        prefix: "/opt/kestrel/john"
     pip:
       bootstrap:
         install:
@@ -1001,6 +1018,93 @@
     systemd:
       name: kestrel-crack-wordlist-provision.service
       enabled: yes
+
+  # John the Ripper (jumbo) -- the crack worker's preferred CPU engine. Compiled
+  # from a pinned source commit for arm64 and installed as a self-contained run/
+  # tree, so `engine = auto` lights up John (PMKID + EAPOL from the hashline
+  # store) instead of falling back to aircrack-ng. Best-effort: a build failure
+  # only warns (the worker uses aircrack); set `packages.john.commit: ""` to skip
+  # it. The install layout is the one kestrel_pi/crack/john.py keys on -- a
+  # `john` wrapper plus `hccapx2john.py`/`wpapcap2john` symlinks on PATH, beside
+  # the run/ tree (the engine contract is docs/developer/crack-interface.md).
+  # This compiles under QEMU, so it is the slowest step of the build.
+  - name: install john (jumbo) build dependencies
+    apt:
+      name:
+        - build-essential
+        - libssl-dev
+        - libpcap-dev
+        - zlib1g-dev
+      state: present
+      update_cache: yes
+    when: packages.john.commit | length > 0
+
+  - name: fetch john (jumbo) source at the pinned commit
+    git:
+      repo: "{{ packages.john.repo }}"
+      dest: /usr/local/src/john
+      version: "{{ packages.john.commit }}"
+      force: yes
+    when: packages.john.commit | length > 0
+
+  # Best-effort: do NOT abort the image build if the compile fails -- the worker
+  # falls back to aircrack-ng. A *successful* build that is then broken IS fatal
+  # (the verify task below), so a half-working John is never shipped silently.
+  - name: build john (jumbo) from source
+    shell: |
+      set -o pipefail
+      cd /usr/local/src/john/src
+      ./configure
+      make -sj"$(nproc)"
+    args:
+      executable: /bin/bash
+    register: john_build
+    failed_when: false
+    changed_when: john_build.rc == 0
+    when: packages.john.commit | length > 0
+
+  - name: install john (jumbo) run tree + PATH entries
+    shell: |
+      set -e
+      install -d -m 0755 {{ packages.john.prefix | quote }}
+      cp -a /usr/local/src/john/run/. {{ packages.john.prefix | quote }}/
+      printf '#!/bin/sh\nexec %s/john "$@"\n' {{ packages.john.prefix | quote }} > /usr/local/bin/john
+      chmod 0755 /usr/local/bin/john
+      ln -sf {{ packages.john.prefix }}/hccapx2john.py /usr/local/bin/hccapx2john.py
+      ln -sf {{ packages.john.prefix }}/wpapcap2john /usr/local/bin/wpapcap2john
+    args:
+      executable: /bin/bash
+    when:
+      - packages.john.commit | length > 0
+      - john_build.rc | default(1) == 0
+
+  # Fatal: a John that built but can't do wpapsk is a real defect, not a missing
+  # optional feature -- fail the build so it is caught before release.
+  - name: verify john (jumbo) cracks wpapsk
+    command: /usr/local/bin/john --test=0 --format=wpapsk
+    changed_when: false
+    when:
+      - packages.john.commit | length > 0
+      - john_build.rc | default(1) == 0
+
+  - name: warn when the john build failed (crack falls back to aircrack)
+    debug:
+      msg: >-
+        John (jumbo) did not build; the crack worker will use aircrack-ng (no
+        PMKID cracking). Last build output:
+        {{ (john_build.stderr_lines | default(['(none)']))[-5:] }}
+    when:
+      - packages.john.commit | length > 0
+      - john_build.rc | default(1) != 0
+
+  - name: remove the john build tree and clean the apt cache
+    shell: |
+      set -e
+      rm -rf /usr/local/src/john
+      apt-get clean
+    args:
+      executable: /bin/bash
+    when: packages.john.commit | length > 0
 
   # Kestrel-Unleashed: enable the crack worker on boot (ships enabled, like
   # capture; it self-gates on [crack] enabled and idles when there is no work).

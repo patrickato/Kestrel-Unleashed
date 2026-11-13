@@ -5,7 +5,7 @@
       "type": "arm-image",
       "iso_url": "https://downloads.raspberrypi.org/raspios_oldstable_lite_arm64/images/raspios_oldstable_lite_arm64-2026-06-19/2026-06-18-raspios-bookworm-arm64-lite.img.xz",
       "iso_checksum": "df4c6fb0b625204a09ce587f35f01b4d6375cb3ee0f05df71a0eca6c7aeb8f8f",
-      "target_image_size": 8368709120,
+      "target_image_size": 10737418240,
       "image_mounts": ["/boot/firmware", "/"],
       "image_arch": "arm64"
     }
