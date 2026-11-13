@@ -29,6 +29,12 @@ cracked results.
   `/var/lib/kestrel/capture/cracked/wpa-sec.potfile`. Recovered passwords
   are sensitive and stay on the device; set `download_results = false` to upload
   only.
+- **Share to Loot** — with `share_to_loot` on (the default), each downloaded key
+  is also merged into the main **Loot** page (keyed by BSSID, tagged
+  `wpa-sec`), so wpa-sec results show up alongside on-device and WPS cracks — not
+  only on this plugin's own *Cracked networks* page. An AP already cracked
+  on-device is left as is. Set `share_to_loot = false` to keep wpa-sec results on
+  the plugin page only.
 
 ## Enabling the plugin
 

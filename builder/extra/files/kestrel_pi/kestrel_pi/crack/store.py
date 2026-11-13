@@ -25,9 +25,27 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 
 from .. import device_id
+
+_MAC12_RE = re.compile(r"^[0-9A-Fa-f]{12}$")
+_MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+
+
+def normalize_bssid(bssid):
+    """Accept ``AA:BB:CC:DD:EE:FF`` or a bare 12-hex MAC and return the
+    colon-separated upper form, or ``""`` when it is neither (so a bad value is
+    never keyed into loot). wpa-sec's download format uses bare-hex MACs; loot
+    keys on the colon form."""
+    b = (bssid or "").strip()
+    if ":" in b:
+        return b.upper() if _MAC_RE.match(b) else ""
+    if _MAC12_RE.match(b):
+        b = b.upper()
+        return ":".join(b[i:i + 2] for i in range(0, 12, 2))
+    return ""
 from . import CRACK_CONTRACT, CRACK_DIR, LOOT_NAME, QUEUE_DIR
 
 
@@ -173,6 +191,36 @@ class LootStore:
             key = "no_handshake" if st == "no-handshake" else st
             out[key] = out.get(key, 0) + 1
         return out
+
+
+def import_key(crack_dir, bssid, essid, psk, source, label=None, extra=None,
+               now=None):
+    """Record an externally-recovered key (WPS, wpa-sec, onlinehashcrack, ...)
+    into the loot store so it shows on ``/loot`` beside on-device cracks. Keyed
+    by BSSID (bare-hex or colon form both accepted). ``label`` is the
+    ``cracked_wordlist`` shown as the origin (defaults to ``source``); ``source``
+    tags the record; ``extra`` merges any source-specific fields. Returns True
+    when a new crack was recorded, False when the BSSID/psk is unusable or the AP
+    was already cracked (an existing key is never overwritten). The store's other
+    writer is the crack worker; both run as pi and each write is a short
+    load/modify/atomic-save, as the WPS path already does."""
+    bssid = normalize_bssid(bssid)
+    if not bssid or not psk:
+        return False
+    store = LootStore(crack_dir)
+    aps = store.load()
+    rec = LootStore.upsert(aps, {"bssid": bssid, "essid": essid or "",
+                                 "type": source, "hashlines": 0, "files": []},
+                           now=now)
+    if rec is None or rec.get("password"):
+        return False
+    rec["no_handshake"] = False
+    LootStore.mark_cracked(rec, psk, label or source, now=now)
+    rec["source"] = source
+    if extra:
+        rec.update(extra)
+    store.save(aps)
+    return True
 
 
 def mask_sig(mask):

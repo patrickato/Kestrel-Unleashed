@@ -623,3 +623,66 @@ def test_auto_loop_defers_expensive_masks_to_offload(tmp_path):
     assert "?d?d?d?d" not in worker._deferred_masks
     with open(os.path.join(str(tmp_path), "crack", STATUS_NAME)) as fh:
         assert json.load(fh)["deferred_offload"] == 1
+
+
+# -- import_key: externally-recovered keys onto /loot ------------------------
+def test_import_key_records_a_crack_and_normalizes_bare_hex(tmp_path):
+    crack = str(tmp_path)
+    # wpa-sec hands back bare-hex BSSIDs; loot keys on the colon form.
+    assert store_mod.import_key(crack, AP1, "MyNet", "sekret123",
+                                source="wpa-sec", label="wpa-sec") is True
+    aps = LootStore(crack).load()
+    assert AP1C in aps                       # keyed in colon-upper form
+    rec = aps[AP1C]
+    assert rec["password"] == "sekret123"
+    assert rec["status"] == "cracked"
+    assert rec["source"] == "wpa-sec"
+    assert rec["cracked_wordlist"] == "wpa-sec"
+    assert rec["essid"] == "MyNet"
+
+
+def test_import_key_never_overwrites_an_existing_key(tmp_path):
+    crack = str(tmp_path)
+    store_mod.import_key(crack, AP1C, "MyNet", "first", source="wpa-sec")
+    # a later import for the same AP must not clobber the recorded key
+    assert store_mod.import_key(crack, AP1C, "MyNet", "second",
+                                source="wpa-sec") is False
+    assert LootStore(crack).load()[AP1C]["password"] == "first"
+
+
+def test_import_key_rejects_bad_bssid_or_empty_psk(tmp_path):
+    crack = str(tmp_path)
+    assert store_mod.import_key(crack, "not-a-mac", "N", "p", "wpa-sec") is False
+    assert store_mod.import_key(crack, AP1C, "N", "", "wpa-sec") is False
+    assert LootStore(crack).load() == {}
+
+
+def test_normalize_bssid_forms():
+    assert store_mod.normalize_bssid("001122334455") == "00:11:22:33:44:55"
+    assert store_mod.normalize_bssid("aa:bb:cc:dd:ee:ff") == "AA:BB:CC:DD:EE:FF"
+    assert store_mod.normalize_bssid("nope") == ""
+    assert store_mod.normalize_bssid("") == ""
+
+
+def test_wpa_sec_potfile_merges_onto_loot(tmp_path):
+    # The real wpa-sec download format parsed by the plugin, then merged to loot
+    # exactly as the plugin's _merge_to_loot does (parse -> import_key).
+    import importlib.util
+    plugin_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                               "..", "plugins", "wpa-sec.py")
+    spec = importlib.util.spec_from_file_location("wpa_sec_merge_test",
+                                                  plugin_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    body = (AP1 + ":aabbccddeeff:Cafe Wifi:coffee99\n"
+            "ffeeddccbbaa:aabbccddeeff:Other:lol\n")
+    records = mod.WpaSec._parse_cracked_potfile(body)
+    crack = str(tmp_path)
+    added = sum(1 for r in records
+                if store_mod.import_key(crack, r["bssid"], r["essid"], r["psk"],
+                                        source="wpa-sec", label="wpa-sec"))
+    assert added == 2
+    aps = LootStore(crack).load()
+    assert aps[AP1C]["password"] == "coffee99"
+    assert aps[AP1C]["essid"] == "Cafe Wifi"
+    assert aps["FF:EE:DD:CC:BB:AA"]["password"] == "lol"

@@ -63,6 +63,10 @@ class WpaSec(Plugin):
         "api_key": {"type": "str", "required": True, "secret": True},
         "endpoint": {"type": "str", "default": "https://wpa-sec.stanev.org"},
         "download_results": {"type": "bool", "default": True},
+        # Also merge the downloaded cracked keys into the shared loot store, so
+        # they appear on the main /loot page (and the map) beside on-device and
+        # WPS cracks -- not only on this plugin's own "cracked networks" page.
+        "share_to_loot": {"type": "bool", "default": True},
         # How often, at most, to re-fetch the cracked potfile while online.
         "results_interval_seconds": {"type": "int", "default": 3600},
         "timeout": {"type": "int", "default": 30},
@@ -465,11 +469,37 @@ class WpaSec(Plugin):
             if networks:
                 self.log.info("wpa-sec: %d cracked network(s) in %s",
                               networks, potfile)
+                self._merge_to_loot(body)
             else:
                 self.log.info("wpa-sec: reached the service; no cracked results "
                               "yet for your key")
         except Exception as exc:  # noqa: BLE001
             self.log.warning("wpa-sec results download failed: %s", exc)
+
+    def _merge_to_loot(self, body):
+        """Put every recovered key on the main /loot page (keyed by BSSID),
+        tagged as a wpa-sec crack, so results from the whole key show up in the
+        project -- not just on this plugin's page. Already-cracked APs are left
+        as they are. Opt-out with ``share_to_loot = false``."""
+        if not self.options.get("share_to_loot", True):
+            return
+        try:
+            from kestrel_pi.crack import CRACK_DIR
+            from kestrel_pi.crack.store import import_key
+        except Exception as exc:  # noqa: BLE001 - never let a merge break download
+            self.log.warning("wpa-sec: loot merge unavailable: %s", exc)
+            return
+        added = 0
+        for rec in self._parse_cracked_potfile(body):
+            try:
+                if import_key(CRACK_DIR, rec.get("bssid", ""),
+                              rec.get("essid", ""), rec.get("psk", ""),
+                              source="wpa-sec", label="wpa-sec"):
+                    added += 1
+            except Exception as exc:  # noqa: BLE001 - one bad record isn't fatal
+                self.log.warning("wpa-sec: could not merge a result: %s", exc)
+        if added:
+            self.log.info("wpa-sec: added %d recovered key(s) to loot", added)
 
     # -- state -----------------------------------------------------------
     def _load_state(self):
