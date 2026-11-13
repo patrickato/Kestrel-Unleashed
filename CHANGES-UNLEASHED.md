@@ -633,6 +633,31 @@ scripts. Tests: +9; 1229 pass, 12 skipped, lint clean. (The full scan→attack
 path, live readout included, still awaits a run on real hardware — see
 `deferred.md`.)
 
+### Added: batch "crack all cameras / all TP-Link" device groups
+The device-aware suggestion already picks the right attack per AP, and the auto
+loop sweeps device-appropriate default-key masks on its own — but cracking a
+*class* of device still meant one Run button (or one `crack run`) at a time. Now
+uncracked APs can be cracked a whole group at once, grouped by **device type**
+(camera, router, printer, …) and by **vendor** (TP-Link, NETGEAR, …).
+
+- `crack/store.py`: pure, stdlib group helpers on the loot store —
+  `match_group` (category alias-folded, vendor substring), `group_members`
+  (crackable = uncracked with a real handshake), `group_summary` (the groups
+  present with an uncracked AP, most-crackable first, the `unknown` sentinel
+  dropped) and `group_files` (the de-duplicated union of a group's capture
+  files via the capture resolver).
+- `/loot` page: a **Crack a device group** form — pick a group and a wordlist
+  and every matching uncracked AP is queued together (shares the manual form's
+  validated enqueue tail; the recovered-key handling is unchanged).
+- CLI: `kestrel crack groups` lists the groups with uncracked counts;
+  `kestrel crack all <group> [--wordlist NAME|all | --mask '…']` batches them
+  (matches a category or a vendor substring, unions the files, queues once).
+
+Touched: `crack/store.py`, `web.py`, `kestrel.sh`, `userguide.py`, tests,
+changelog. Release impact: **app-layer-safe** — pure logic, the web layer and
+the CLI; no new deps, units or config. Tests: +6; 1235 pass, 12 skipped, lint
+clean.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

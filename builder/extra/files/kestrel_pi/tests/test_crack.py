@@ -212,6 +212,65 @@ def test_upsert_identifies_device_and_keeps_result():
     assert rec2["password"] == "hunter2!" and rec2["status"] == "cracked"
 
 
+def _grec(bssid, category="", vendor="", status="pending"):
+    return {"bssid": bssid, "category": category, "vendor": vendor,
+            "status": status}
+
+
+def test_match_group_category_alias_and_vendor_substring():
+    cam = _grec("A", category="camera", vendor="Hikvision")
+    assert store_mod.match_group(cam, "category", "camera")
+    assert store_mod.match_group(cam, "category", "cameras")       # plural alias
+    assert store_mod.match_group(cam, "category", "CAMERA")        # case-insensitive
+    assert not store_mod.match_group(cam, "category", "router")
+    tp = _grec("B", category="router", vendor="TP-Link")
+    assert store_mod.match_group(tp, "vendor", "tp-link")          # substring, folded
+    assert store_mod.match_group(tp, "vendor", "tp")
+    assert not store_mod.match_group(tp, "vendor", "netgear")
+    assert not store_mod.match_group(tp, "vendor", "")             # empty never matches
+
+
+def test_group_members_filters_uncrackable():
+    aps = {"A": _grec("A", category="camera", status="pending"),
+           "B": _grec("B", category="camera", status="cracked"),
+           "C": _grec("C", category="camera", status="no-handshake"),
+           "D": _grec("D", category="camera", status="exhausted")}
+    got = {r["bssid"] for r in store_mod.group_members(aps, "category", "camera")}
+    assert got == {"A", "D"}                                       # pending + exhausted
+    allm = {r["bssid"] for r in store_mod.group_members(
+        aps, "category", "camera", crackable_only=False)}
+    assert allm == {"A", "B", "C", "D"}
+
+
+def test_group_summary_counts_sorts_and_drops_unknown():
+    aps = {"A": _grec("A", category="camera", vendor="Acme", status="pending"),
+           "B": _grec("B", category="camera", vendor="Acme", status="pending"),
+           "C": _grec("C", category="router", vendor="Acme", status="cracked"),
+           "D": _grec("D", category="unknown", vendor="unknown", status="pending")}
+    rows = store_mod.group_summary(aps)
+    by_key = {(r["by"], r["value"]): r for r in rows}
+    assert by_key[("category", "camera")] == {
+        "by": "category", "value": "camera", "total": 2, "crackable": 2}
+    assert by_key[("vendor", "Acme")]["crackable"] == 2            # A,B (C cracked)
+    assert by_key[("vendor", "Acme")]["total"] == 3
+    assert ("category", "router") not in by_key                   # all cracked
+    assert ("category", "unknown") not in by_key                  # sentinel dropped
+    assert ("vendor", "unknown") not in by_key
+    assert rows[0]["crackable"] >= rows[-1]["crackable"]           # most-crackable first
+
+
+def test_group_files_unions_and_dedupes():
+    aps = {"A": _grec("A", category="camera", status="pending"),
+           "B": _grec("B", category="camera", status="pending"),
+           "X": _grec("X", category="router", status="pending")}
+    files = {"A": ["/f1.hc22000", "/shared.hc22000"],
+             "B": ["/shared.hc22000", "/f2.hc22000"], "X": ["/other.hc22000"]}
+    members, got = store_mod.group_files(
+        aps, "category", "camera", lambda b: files.get(b, []))
+    assert {r["bssid"] for r in members} == {"A", "B"}
+    assert got == ["/f1.hc22000", "/shared.hc22000", "/f2.hc22000"]   # deduped union
+
+
 def test_derive_status_pending_exhausted_cracked():
     rec = {"tried": [], "password": ""}
     sigs = {"a:1:1", "b:2:2"}

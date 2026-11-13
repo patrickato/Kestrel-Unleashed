@@ -777,11 +777,36 @@ def create_app(daemon):
                 msg += " Note: quick-crack is off; enable it to process the queue."
             return _loot_redirect(ctl, msg)
 
-        picked = [valid_files[n] for n in request.form.getlist("file")
-                  if n in valid_files]
-        if not picked:
-            return _loot_redirect(ctl, "Select at least one capture file.",
-                                  err=True)
+        # Batch: crack a whole device group (all cameras / all TP-Link, ...).
+        # Resolve the group's uncracked APs to the union of their capture files,
+        # then run the chosen wordlist/mask over them exactly like the manual
+        # form. The group value is validated and the files come from the capture
+        # resolver, so a crafted form can't reach outside the store.
+        group_raw = (request.form.get("group") or "").strip()
+        if group_raw:
+            group_by, _, group_value = group_raw.partition(":")
+            if group_by not in crack_store.GROUP_BYS or not group_value:
+                return _loot_redirect(ctl, "Pick a device group to crack.",
+                                      err=True)
+            aps = crack_store.LootStore(CRACK_DIR).load()
+            members, picked = crack_store.group_files(
+                aps, group_by, group_value, daemon.capture.files_for_bssid)
+            if not members:
+                return _loot_redirect(
+                    ctl, "No uncracked APs in that group right now.", err=True)
+            if not picked:
+                return _loot_redirect(
+                    ctl, "No captured handshakes for that group yet.", err=True)
+            job_label = "group:%s" % group_value
+            group_desc = " for %d AP(s) in %s" % (len(members), group_value)
+        else:
+            picked = [valid_files[n] for n in request.form.getlist("file")
+                      if n in valid_files]
+            if not picked:
+                return _loot_redirect(ctl, "Select at least one capture file.",
+                                      err=True)
+            job_label = ""
+            group_desc = ""
         # A brute-force mask takes precedence over the wordlist when filled. The
         # mask is passed to hashcat as an argv element (no shell), so it can't
         # inject; cap its length so a stray paste can't make a silly keyspace.
@@ -789,9 +814,10 @@ def create_app(daemon):
         if mask:
             if len(mask) > 64:
                 return _loot_redirect(ctl, "Mask is too long.", err=True)
-            crack_store.enqueue_job(CRACK_DIR, picked, mask=mask, label="web-mask")
-            msg = ("Queued a mask job (%s) over %d file(s); a brute force can "
-                   "take hours on the Pi." % (mask, len(picked)))
+            crack_store.enqueue_job(CRACK_DIR, picked, mask=mask,
+                                    label=job_label or "web-mask")
+            msg = ("Queued a mask job (%s) over %d file(s)%s; a brute force can "
+                   "take hours on the Pi." % (mask, len(picked), group_desc))
             if not bool(crack_cfg.get("enabled", True)):
                 msg += " Note: quick-crack is off; enable it to process the queue."
             return _loot_redirect(ctl, msg)
@@ -814,9 +840,9 @@ def create_app(daemon):
                 rules = [rpath]
         for wl in targets:
             crack_store.enqueue_job(CRACK_DIR, picked, wl, rules=rules,
-                                    label="web")
-        msg = "Queued %d crack job(s) over %d file(s)." % (len(targets),
-                                                           len(picked))
+                                    label=job_label or "web")
+        msg = "Queued %d crack job(s) over %d file(s)%s." % (
+            len(targets), len(picked), group_desc)
         if not bool(crack_cfg.get("enabled", True)):
             msg += (" Note: quick-crack is off; run 'kestrel crack enable' to "
                     "process the queue.")
@@ -3057,6 +3083,7 @@ def _render_loot(daemon, control=None, message=None, error=False):
              + "</tbody></table></div>")
 
     form = _loot_crack_form(daemon, control)
+    group_form = _loot_group_form(daemon, control, aps)
     guide = _loot_guide()
     gpu = _loot_gpu_section(control)
     back = '<p><a href="' + _esc(_url("/", control)) + '">&larr; Dashboard</a></p>'
@@ -3064,7 +3091,7 @@ def _render_loot(daemon, control=None, message=None, error=False):
     return _page(
         "Loot - Kestrel",
         back + "<h1>Loot</h1>" + banner + readout + control_strip
-        + table + form + gpu + guide,
+        + table + form + group_form + gpu + guide,
     )
 
 
@@ -3224,6 +3251,57 @@ def _loot_crack_form(daemon, control):
         + _csrf_field(control) + file_box
         + '<div class="formrow">' + wl_select + rule_html + mask_html
         + '<button type="submit">Crack selected</button></div></form>')
+
+
+def _loot_group_form(daemon, control, aps):
+    """Batch "crack a device group" on /loot: one tap queues a crack of every
+    uncracked AP of a kind (all cameras, all TP-Link, ...) against a chosen
+    wordlist. Only with web auth on, and only when the loot holds a group with an
+    uncracked AP; otherwise it renders nothing (the per-AP Run buttons and the
+    manual form still cover it)."""
+    if control is None or not control.get("ready"):
+        return ""
+    groups = crack_store.group_summary(aps)
+    if not groups:
+        return ""
+    cfg = daemon._fresh_config()
+    crack_cfg = cfg.get("crack") or {}
+    wdir = crack_cfg.get("wordlists_dir") or CRACK_DEFAULTS["wordlists_dir"]
+    order = crack_cfg.get("order") or "size"
+    lists = crack_wordlists.discover(wdir, order)
+
+    gopts = []
+    for g in groups:
+        if g["crackable"] == g["total"]:
+            label = "all %s — %d uncracked" % (g["value"], g["crackable"])
+        else:
+            label = "all %s — %d of %d uncracked" % (g["value"], g["crackable"],
+                                                     g["total"])
+        gopts.append('<option value="' + _esc(g["by"] + ":" + g["value"]) + '">'
+                     + _esc(label) + "</option>")
+    group_select = ('<label>Device group <select name="group">' + "".join(gopts)
+                    + "</select></label>")
+
+    wopts = ['<option value="all">All wordlists (smallest first)</option>']
+    for w in lists:
+        wopts.append('<option value="' + _esc(w["name"]) + '">'
+                     + _esc(w["name"]) + " (%.0f KB)" % (w["size"] / 1024.0)
+                     + "</option>")
+    wl_select = ('<label>Wordlist <select name="wordlist">' + "".join(wopts)
+                 + "</select></label>")
+
+    hint = ('<p class="hint">Crack a whole device class at once — pick a group '
+            "(grouped by device type and by vendor) and a wordlist, and every "
+            "uncracked AP of that kind is queued together. The auto-cracker "
+            "already sweeps device-appropriate default-key masks on its own; this "
+            "is for throwing a chosen list at, say, every camera or every TP-Link "
+            "in one go.</p>")
+    return (
+        "<h2>Crack a device group</h2>" + hint
+        + '<form method="post" action="' + _esc(_url("/loot", control)) + '">'
+        + _csrf_field(control)
+        + '<div class="formrow">' + group_select + wl_select
+        + '<button type="submit">Crack group</button></div></form>')
 
 
 def _render_wps(daemon, control=None, message=None, error=False,

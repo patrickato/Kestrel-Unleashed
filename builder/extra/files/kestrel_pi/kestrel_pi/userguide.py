@@ -299,7 +299,7 @@ For a random **all-numeric** router key that no wordlist holds, use a brute-forc
 
 ### Seeing and driving it
 
-The dashboard's **Loot** card (→ *Loot* page) lists every captured network, its device type and BSSID, and — for the ones it cracked — the password in cleartext. Each not-yet-cracked row shows the **suggested** attack for that kind of device, and with the dashboard login on that suggestion is a one-tap **Run** button: tap it and Kestrel queues exactly that attack (the device-default wordlist or the right mask) against just that network — no typing. The same page also lets you tick one or more capture files and queue them against a chosen wordlist or ruleset: the easy way to throw a bigger list at whatever has not cracked yet, from your phone or the device's own screen.
+The dashboard's **Loot** card (→ *Loot* page) lists every captured network, its device type and BSSID, and — for the ones it cracked — the password in cleartext. Each not-yet-cracked row shows the **suggested** attack for that kind of device, and with the dashboard login on that suggestion is a one-tap **Run** button: tap it and Kestrel queues exactly that attack (the device-default wordlist or the right mask) against just that network — no typing. The same page also lets you tick one or more capture files and queue them against a chosen wordlist or ruleset: the easy way to throw a bigger list at whatever has not cracked yet, from your phone or the device's own screen. And the **Crack a device group** box batches a whole class at once — pick, say, *all cameras* or *all TP-Link* (groups are formed by device type and by vendor, counting only the uncracked), choose a wordlist, and every matching network is queued together.
 
 From the terminal:
 
@@ -308,6 +308,8 @@ kestrel crack status                 # worker state and a cracked/total summary
 kestrel crack watch                  # live, redrawing view of the crack in progress (Ctrl-C to quit)
 kestrel crack list                   # the loot: recovered passwords, in cleartext
 kestrel crack show HomeWiFi          # everything known about one network
+kestrel crack groups                 # device groups (by type and vendor) with an uncracked AP
+sudo kestrel crack all cameras       # batch-crack every uncracked AP of a kind at once
 kestrel crack wordlists              # the wordlists on the device, in the order tried
 kestrel crack run HomeWiFi.hc22000 --wordlist rockyou.txt   # re-run one capture against a bigger list
 kestrel crack queue                  # what manual jobs are lined up
@@ -861,6 +863,8 @@ This is the same mechanism as the first-boot Wi-Fi staging, and it works at any 
 | `kestrel crack list [FILTER]` | List the loot (recovered passwords, in cleartext). |
 | `kestrel crack show <ESSID\|BSSID>` | Full loot for the matching network(s). |
 | `kestrel crack suggest <ESSID\|BSSID>` | Suggest the best attacks for that network's device type (camera, ISP router, Wi-Fi Direct printer, …) with ready `crack run` lines. |
+| `kestrel crack groups` | List device groups (by type and by vendor) that still have an uncracked AP. |
+| `kestrel crack all <GROUP> [--wordlist NAME\|all \| --mask '…']` | Batch-crack every uncracked AP of a kind at once (e.g. `all cameras`, `all tp-link`). |
 | `kestrel crack wordlists` | List the wordlists on the device, in the order tried. |
 | `kestrel crack run FILE... [--wordlist NAME\|all \| --mask '?d?d?d?d?d?d?d?d'] [--rules NAME]` | Queue a manual crack (wordlist or brute-force mask) of one or more capture files. |
 | `kestrel crack enable` / `disable` | Turn on-device cracking on or off (hard). |

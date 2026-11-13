@@ -67,6 +67,10 @@ Usage: $PROG <command>
   crack show Q       Full loot for the network(s) matching an ESSID or BSSID
   crack suggest Q    Suggest the best attacks for a network by its device type
                      (e.g. a camera, an ISP router, a Wi-Fi Direct printer)
+  crack groups       List device groups (by type and vendor) with an uncracked AP
+  crack all GROUP [--wordlist NAME|all | --mask '?d?d?d?d?d?d?d?d']
+                     Batch-crack every uncracked AP of a kind at once, e.g.
+                     'crack all cameras' or 'crack all tp-link'
   crack wordlists    List the wordlists on the device (in the order tried)
   crack wordlists optimize   Merge all lists into one deduped, WPA-length master list
   crack run FILE... [--wordlist NAME|all | --mask '?d?d?d?d?d?d?d?d'] [--rules NAME]...
@@ -1769,6 +1773,90 @@ print(S.render_text(S.suggest(essid=essid, bssid=bssid, have_defaults=have),
 '
 }
 
+# List the device groups (by device type and by vendor) that still have an
+# uncracked AP, so `crack all <group>` can crack a whole class at once.
+cmd_crack_groups() {
+    run_as_pi "$PWN_VENV_PYTHON" -I -c '
+import sys
+from kestrel_pi.crack.store import LootStore, group_summary
+rows = group_summary(LootStore(sys.argv[1]).load())
+if not rows:
+    print("No device groups with an uncracked AP yet.")
+    print("(Capture handshakes and let the cracker run; groups come from the loot.)")
+    raise SystemExit(0)
+print("%-9s %-22s %s" % ("by", "group", "uncracked/total"))
+for b in rows:
+    print("%-9s %-22s %d/%d" % (b["by"], b["value"], b["crackable"], b["total"]))
+print()
+print("Crack a whole group:  sudo kestrel crack all <group> [--wordlist NAME|all | --mask \x27?d?d?d?d?d?d?d?d\x27]")
+' "$PWN_CRACK_DIR"
+}
+
+# Batch-crack every uncracked AP of a kind: `crack all cameras`, `crack all
+# tp-link`. Matches a device category (alias-folded) or a vendor substring,
+# unions the matching APs' capture files, and queues the chosen wordlist(s)
+# or a mask over them in one go. Runs as pi (the worker owns the queue).
+cmd_crack_all() {
+    local group="" wordlist="" mask=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --wordlist|-w) wordlist=$2; shift 2 ;;
+            --mask|-m) mask=$2; shift 2 ;;
+            --*) die "unknown option for 'crack all': $1" ;;
+            *) [ -z "$group" ] || die "one group at a time"; group=$1; shift ;;
+        esac
+    done
+    [ -n "$group" ] || die "usage: $PROG crack all <group> [--wordlist NAME|all | --mask '?d?d?d?d?d?d?d?d']  (see: $PROG crack groups)"
+    local wd result
+    wd=$(cfg crack.wordlists_dir "$PWN_WORDLISTS_DIR")
+    result=$(run_as_pi "$PWN_VENV_PYTHON" -I -c '
+import sys
+from kestrel_pi.capture import CaptureInterface
+from kestrel_pi.crack import store, wordlists
+store_dir, crack_dir, wdir, group, wl, mask = sys.argv[1:7]
+aps = store.LootStore(crack_dir).load()
+# Match the group against a device category first, else a vendor substring.
+by = None
+for cand in ("category", "vendor"):
+    if store.group_members(aps, cand, group):
+        by = cand
+        break
+if by is None:
+    print("NONE"); raise SystemExit(0)
+cap = CaptureInterface(store_dir)
+members, files = store.group_files(aps, by, group, cap.files_for_bssid)
+if not files:
+    print("NOFILES %d" % len(members)); raise SystemExit(0)
+label = "group:%s" % group
+if mask:
+    store.enqueue_job(crack_dir, files, mask=mask, label=label)
+    jobs = 1
+else:
+    if wl and wl != "all":
+        import os
+        paths = [wl if os.path.isabs(wl) else os.path.join(wdir, wl)]
+        if not os.path.isfile(paths[0]):
+            print("NOLIST %s" % wl); raise SystemExit(0)
+    else:
+        paths = [w["path"] for w in wordlists.discover(wdir, "size")]
+    if not paths:
+        print("NOLIST *"); raise SystemExit(0)
+    for p in paths:
+        store.enqueue_job(crack_dir, files, p, label=label)
+    jobs = len(paths)
+print("OK %d %d %d %s" % (jobs, len(members), len(files), by))
+' "$PWN_CAPTURE_DIR" "$PWN_CRACK_DIR" "$wd" "$group" "$wordlist" "$mask") \
+        || die "could not queue the group crack"
+    case "$result" in
+        NONE) die "no device group matches '$group' with an uncracked AP (see: $PROG crack groups)" ;;
+        NOFILES*) die "no captured handshakes for '$group' yet (${result#NOFILES })" ;;
+        NOLIST*) die "no such wordlist: ${result#NOLIST } (looked in $wd)" ;;
+        OK*) set -- $result; log "queued $2 job(s) over $4 file(s) for $3 AP(s) in '$group' (by $5)" ;;
+        *) die "unexpected result queueing the group crack" ;;
+    esac
+    [ "$(cfg crack.enabled true)" = true ] || log "note: quick-crack is disabled; run 'sudo $PROG crack enable' to process the queue"
+}
+
 cmd_crack_wordlists() {
     if [ "${1:-}" = "optimize" ]; then
         shift
@@ -2023,6 +2111,8 @@ cmd_crack() {
         list|loot) cmd_crack_list "$@" ;;
         show) cmd_crack_show "$@" ;;
         suggest) cmd_crack_suggest "$@" ;;
+        groups) cmd_crack_groups "$@" ;;
+        all) cmd_crack_all "$@" ;;
         wordlists|lists) cmd_crack_wordlists "$@" ;;
         run) cmd_crack_run "$@" ;;
         kit) cmd_crack_kit "$@" ;;
@@ -2034,7 +2124,7 @@ cmd_crack() {
         queue) cmd_crack_queue ;;
         clear-queue) cmd_crack_clear_queue ;;
         clear) cmd_crack_clear "$@" ;;
-        *) die "unknown 'crack' subcommand: $sub (status|watch|list|show|suggest|wordlists|run|kit|ingest|enable|disable|pause|resume|queue|clear-queue|clear)" ;;
+        *) die "unknown 'crack' subcommand: $sub (status|watch|list|show|suggest|groups|all|wordlists|run|kit|ingest|enable|disable|pause|resume|queue|clear-queue|clear)" ;;
     esac
 }
 

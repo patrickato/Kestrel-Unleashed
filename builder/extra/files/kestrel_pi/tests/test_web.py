@@ -1155,6 +1155,66 @@ def test_loot_run_suggested_queues_the_right_job(monkeypatch, tmp_path):
     assert job["label"] == "suggest:somenet"
 
 
+def test_loot_group_form_and_batch_crack(monkeypatch, tmp_path):
+    from kestrel_pi.crack import store as crack_store
+
+    crackdir = tmp_path / "crack"
+    crackdir.mkdir()
+    monkeypatch.setattr(web, "CRACK_DIR", str(crackdir))
+    store = crack_store.LootStore(str(crackdir))
+    aps = {}
+    # two Ring doorbells (one pending, one cracked) + a NETGEAR router pending
+    crack_store.LootStore.upsert(aps, {"bssid": "AA:AA:AA:AA:AA:01",
+                                       "essid": "Ring-Front", "hashlines": 1}, now=1)
+    done = crack_store.LootStore.upsert(aps, {"bssid": "AA:AA:AA:AA:AA:02",
+                                              "essid": "Ring-Back", "hashlines": 1},
+                                        now=1)
+    crack_store.LootStore.mark_cracked(done, "pw", "x", now=2)
+    crack_store.LootStore.upsert(aps, {"bssid": "BB:BB:BB:BB:BB:01",
+                                       "essid": "NETGEAR57", "hashlines": 1}, now=1)
+    store.save(aps)
+
+    client, _ = _client(
+        monkeypatch, tmp_path, BASIC,
+        hashline_files=["/x/front.hc22000", "/x/ng.hc22000"],
+        bssid_files={"AA:AA:AA:AA:AA:01": ["/x/front.hc22000"],
+                     "BB:BB:BB:BB:BB:01": ["/x/ng.hc22000"]})
+    page = client.get("/loot", headers=_basic()).get_data(as_text=True)
+    assert "Crack a device group" in page
+    # the pending doorbell forms a group; the all-cracked ones never would
+    assert "all doorbell" in page and 'value="category:doorbell"' in page
+
+    # A mask batch over the group (no wordlist dir needed for the test); the
+    # wordlist fan-out shares the manual form's tail, covered elsewhere.
+    resp = client.post("/loot", headers=_basic(),
+                       data={"csrf": _csrf(page), "group": "category:doorbell",
+                             "mask": "?d?d?d?d?d?d?d?d"},
+                       follow_redirects=False)
+    assert resp.status_code == 303
+    jobs = crack_store.list_jobs(str(crackdir))
+    assert len(jobs) == 1                  # one job over the group's union of files
+    _p, job = jobs[0]
+    # only the pending doorbell's file is queued (the cracked Ring is excluded)
+    assert job["files"] == ["/x/front.hc22000"] and job["mask"].startswith("?d")
+    assert job["label"] == "group:doorbell"
+
+
+def test_loot_crack_group_rejects_bad_group(monkeypatch, tmp_path):
+    from kestrel_pi.crack import store as crack_store
+
+    crackdir = tmp_path / "crack"
+    crackdir.mkdir()
+    monkeypatch.setattr(web, "CRACK_DIR", str(crackdir))
+    client, _ = _client(monkeypatch, tmp_path, BASIC,
+                        hashline_files=["/x/a.hc22000"])
+    page = client.get("/loot", headers=_basic()).get_data(as_text=True)
+    resp = client.post("/loot", headers=_basic(),
+                       data={"csrf": _csrf(page), "group": "bogus:thing"},
+                       follow_redirects=False)
+    assert resp.status_code == 303        # redirected with an error, nothing queued
+    assert crack_store.list_jobs(str(crackdir)) == []
+
+
 def test_loot_no_handshake_row_shows_the_fix_not_a_run_button(monkeypatch, tmp_path):
     from kestrel_pi.crack import store as crack_store
 

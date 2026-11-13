@@ -224,6 +224,90 @@ def import_key(crack_dir, bssid, essid, psk, source, label=None, extra=None,
     return True
 
 
+# -- device grouping (batch "crack all cameras / all TP-Link") ---------------
+# Each loot record caches a device ``category`` (camera, router, gateway,
+# printer, hotspot, iot, ...) and a ``vendor`` (from device_id), so uncracked
+# APs can be cracked a whole class at a time instead of one Run button each.
+GROUP_BYS = ("category", "vendor")
+
+# Friendly plurals/synonyms the CLI accepts for a category group.
+_GROUP_ALIASES = {
+    "cameras": "camera", "routers": "router", "gateways": "gateway",
+    "printers": "printer", "hotspots": "hotspot", "iots": "iot",
+    "doorbells": "doorbell", "speakers": "speaker", "tvs": "tv",
+}
+
+
+def _canon_group(value):
+    v = (value or "").strip().lower()
+    return _GROUP_ALIASES.get(v, v)
+
+
+def is_crackable(rec):
+    """True when an AP is worth a crack job: not already cracked and it holds a
+    real handshake (a PMKID-only / ``no-handshake`` AP can't crack on-device)."""
+    return rec.get("status") not in ("cracked", "no-handshake")
+
+
+def match_group(rec, by, value):
+    """Whether ``rec`` is in the device group ``(by, value)``. ``category`` is an
+    exact (alias-folded) match; ``vendor`` is a case-insensitive substring, so
+    ``tp-link`` matches ``TP-Link``."""
+    val = (value or "").strip().lower()
+    if not val:
+        return False
+    if by == "category":
+        return (rec.get("category") or "").strip().lower() == _canon_group(val)
+    if by == "vendor":
+        return val in (rec.get("vendor") or "").strip().lower()
+    return False
+
+
+def group_members(aps, by, value, crackable_only=True):
+    """Records in the device group ``(by, value)`` -- by default only the ones
+    still worth cracking (uncracked, with a handshake)."""
+    out = [r for r in aps.values() if match_group(r, by, value)]
+    if crackable_only:
+        out = [r for r in out if is_crackable(r)]
+    return out
+
+
+def group_summary(aps):
+    """The device groups present that have at least one crackable AP, as
+    ``[{by, value, total, crackable}]`` sorted most-crackable first. Drives the
+    batch "crack all <group>" picker on /loot and ``kestrel crack groups``. An AP
+    counts under both its category and its vendor (both are valid groups)."""
+    buckets = {}
+    for rec in aps.values():
+        for by in GROUP_BYS:
+            val = (rec.get(by) or "").strip()
+            if not val or val.lower() == "unknown":   # device-ID's not-ID'd sentinel
+                continue
+            bucket = buckets.setdefault((by, val.lower()),
+                                        {"by": by, "value": val,
+                                         "total": 0, "crackable": 0})
+            bucket["total"] += 1
+            if is_crackable(rec):
+                bucket["crackable"] += 1
+    out = [b for b in buckets.values() if b["crackable"] > 0]
+    out.sort(key=lambda b: (-b["crackable"], b["by"], b["value"].lower()))
+    return out
+
+
+def group_files(aps, by, value, files_for_bssid):
+    """The crackable APs in group ``(by, value)`` and the de-duplicated union of
+    their capture files, resolved through the ``files_for_bssid`` callable (the
+    capture interface's resolver). Returns ``(members, files)``; the caller
+    enqueues the chosen wordlist(s)/mask over ``files``."""
+    members = group_members(aps, by, value)
+    files = []
+    for rec in members:
+        for path in files_for_bssid(rec.get("bssid") or ""):
+            if path not in files:
+                files.append(path)
+    return members, files
+
+
 def mask_sig(mask):
     """A stable tried-set signature for a brute-force mask (deterministic, so it
     never needs re-running once tried)."""
