@@ -84,6 +84,8 @@ Usage: $PROG <command>
   wps attack BSSID [--channel N] [--no-pixie] [--yes]
                      Pixie-Dust / PIN attack on a WPS AP; asks the authorized-use
                      ack, pauses capture, and saves a recovered key to loot
+  wps stop           Stop a running/stuck scan or attack, restore the dongle
+                     and capture, and clear the WPS state
   wps list           List WPS-recovered keys
   deauth BSSID [--client MAC] [--channel N] [--count N] [--yes]
                      Targeted deauthentication of an AP (knocks a client off so
@@ -2216,9 +2218,32 @@ cmd_wps() {
     case "$sub" in
         scan) cmd_wps_scan "$@" ;;
         attack) cmd_wps_attack "$@" ;;
+        stop) cmd_wps_stop ;;
         list) cmd_wps_list ;;
-        *) die "unknown 'wps' subcommand: $sub (scan|attack|list)" ;;
+        *) die "unknown 'wps' subcommand: $sub (scan|attack|stop|list)" ;;
     esac
+}
+
+# Stop a running/stuck WPS scan or attack and clean up after it: stop the
+# background unit, free its (fixed) name, put the dongle back to managed if a
+# run left it in monitor mode, restart capture if it is configured on, and clear
+# the state the /wps page reads. Safe to run when nothing is going.
+cmd_wps_stop() {
+    need_root
+    systemctl stop kestrel-wps-run.service 2>/dev/null || true
+    systemctl reset-failed kestrel-wps-run.service 2>/dev/null || true
+    local iface
+    iface=$(capture_resolve_iface "$(cfg capture.interface auto)" 2>/dev/null || true)
+    if [ -n "$iface" ]; then
+        ip link set "$iface" down 2>/dev/null || true
+        iw dev "$iface" set type managed 2>/dev/null || true
+        ip link set "$iface" up 2>/dev/null || true
+    fi
+    if [ "$(cfg capture.enabled false)" = true ]; then
+        systemctl start --no-block "$PWN_CAPTURE_SERVICE" 2>/dev/null || true
+    fi
+    wps_set_state idle
+    log "WPS run stopped."
 }
 
 ## deauth (targeted deauthentication; authorized use only) ##################

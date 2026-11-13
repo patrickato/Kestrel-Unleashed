@@ -471,22 +471,50 @@ def test_wps_refused_while_web_auth_is_off(env, monkeypatch):
     assert calls == []
 
 
-def test_wps_run_builds_a_fixed_name_background_unit(env, monkeypatch):
-    seen = {}
+def _wps_runner(monkeypatch, active=False):
+    """Record every subprocess.run and make `systemctl is-active` report
+    active/inactive, so run_wps's pre-flight can be exercised."""
+    seen = []
 
     class _P:
-        returncode, stdout, stderr = 0, "", ""
+        def __init__(self, rc=0):
+            self.returncode, self.stdout, self.stderr = rc, "", ""
 
     def fake_run(cmd, **kw):
-        seen["cmd"] = list(cmd)
-        return _P()
+        seen.append(list(cmd))
+        if cmd[:2] == ["systemctl", "is-active"]:
+            return _P(0 if active else 3)
+        return _P(0)
 
     monkeypatch.setattr(ctl.subprocess, "run", fake_run)
+    return seen
+
+
+def test_wps_run_clears_a_stale_unit_then_launches(env, monkeypatch):
+    seen = _wps_runner(monkeypatch, active=False)
     reply = ctl.run_wps(["wps", "scan"])
     assert reply["ok"] is True
-    assert seen["cmd"][:5] == ["systemd-run", "--quiet", "--collect",
-                               "--unit=kestrel-wps-run", ctl.PWN_TOOL]
-    assert seen["cmd"][5:] == ["wps", "scan"]
+    # a finished/failed prior run is cleared so its fixed name is free again
+    assert ["systemctl", "reset-failed", "kestrel-wps-run.service"] in seen
+    launch = [c for c in seen if c and c[0] == "systemd-run"][0]
+    assert launch[:5] == ["systemd-run", "--quiet", "--collect",
+                          "--unit=kestrel-wps-run", ctl.PWN_TOOL]
+    assert launch[5:] == ["wps", "scan"]
+
+
+def test_wps_run_refuses_while_a_run_is_active(env, monkeypatch):
+    seen = _wps_runner(monkeypatch, active=True)
+    reply = ctl.run_wps(["wps", "scan"])
+    assert reply["ok"] is False and "already in progress" in reply["error"]
+    assert not any(c and c[0] == "systemd-run" for c in seen)  # never launched
+
+
+def test_wps_stop_goes_through_the_cli(env, monkeypatch):
+    _auth_on(env)
+    calls = _stub_cli(monkeypatch)
+    reply = ctl.apply_change({"target": "wps", "action": "stop"})
+    assert reply["ok"] is True and reply["wps"] == "stop"
+    assert calls == [["wps", "stop"]]
 
 
 # -- evil-portal start/stop from the web (Kestrel-Unleashed) ----------------

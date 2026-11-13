@@ -604,11 +604,24 @@ def apply_evil_portal(change):
     return {"ok": True, "evil_portal": action, "restart": False}
 
 
+WPS_UNIT = "kestrel-wps-run.service"
+
+
 def run_wps(args):
     """Launch a WPS scan/attack as a fixed-name transient unit (background --
     scans and attacks run for seconds-to-minutes, too long to block the web
-    request). The fixed unit name means systemd refuses a second run while one is
-    active, so two never fight over the one radio."""
+    request). The fixed unit name means only one runs at a time (one radio), but
+    a finished or crashed run can leave the unit *loaded*, which made the next
+    launch fail with "Unit ... was already loaded or has a fragment file". So we
+    first clear a non-running instance (reset-failed frees the name) and refuse a
+    new run only when one is genuinely still active (``wps stop`` cancels that)."""
+    subprocess.run(["systemctl", "reset-failed", WPS_UNIT],
+                   capture_output=True, check=False)
+    active = subprocess.run(["systemctl", "is-active", "--quiet", WPS_UNIT],
+                            check=False).returncode == 0
+    if active:
+        return {"ok": False,
+                "error": "a WPS run is already in progress; stop it first"}
     cmd = ["systemd-run", "--quiet", "--collect", "--unit=kestrel-wps-run",
            PWN_TOOL] + list(args)
     try:
@@ -636,6 +649,15 @@ def apply_wps(change):
     action = change.get("action")
     if action == "scan":
         return run_wps(["wps", "scan"])
+    if action == "stop":
+        # Quick (not a background unit): stop any run, restore the dongle and
+        # capture, clear state. Goes through the CLI so web and terminal match.
+        rc, out = _run_capture_cli(["wps", "stop"])
+        if rc != 0:
+            detail = out.splitlines()[-1] if out else _silent_cli_error("wps", rc)
+            return {"ok": False, "error": detail}
+        sys.stderr.write("plugins-ctl apply: wps stop via web\n")
+        return {"ok": True, "wps": "stop", "restart": False}
     if action == "attack":
         bssid = str(change.get("bssid") or "").strip()
         if not _MAC_RE.match(bssid):

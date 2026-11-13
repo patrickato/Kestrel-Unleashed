@@ -362,11 +362,12 @@ Many home routers leave **WPS** on, and a WPS access point can be made to hand o
 
 It uses the **capture dongle** (not the Pi's built-in Wi-Fi) and **pauses capture** while it runs — one radio, one job at a time. There is no always-on service; it only does something when you run it.
 
-From the dashboard (with the login on): the **WPS attacks** card (→ *WPS attacks* page) has a **Scan for WPS APs** button; the results list each WPS AP with an **Attack** button beside it (first attack asks the acknowledgment). The page shows when a scan or attack is running and refreshes itself, and a recovered key lands on the Loot page. From the terminal:
+From the dashboard (with the login on): the **WPS attacks** card (→ *WPS attacks* page) has a **Scan for WPS APs** button; the results list each WPS AP with an **Attack** button beside it (first attack asks the acknowledgment). While a scan or attack is running the page shows a **Stop** button (and refreshes itself); Stop cancels the run, puts the dongle back and clears the state. A recovered key lands on the Loot page. From the terminal:
 
 ```bash
 sudo kestrel wps scan                      # find WPS-enabled APs nearby
 sudo kestrel wps attack AA:BB:CC:DD:EE:FF  # Pixie-Dust; saves a recovered key to loot
+sudo kestrel wps stop                      # cancel a running/stuck scan or attack
 kestrel wps list                           # what WPS has recovered
 ```
 
@@ -859,6 +860,7 @@ This is the same mechanism as the first-boot Wi-Fi staging, and it works at any 
 | --- | --- |
 | `kestrel wps scan [--seconds N]` | Scan for WPS-enabled APs (uses the dongle; pauses capture). |
 | `kestrel wps attack <BSSID> [--channel N] [--no-pixie] [--yes]` | Pixie-Dust / PIN attack; asks the authorized-use ack, pauses capture, saves a recovered key to loot. |
+| `kestrel wps stop` | Cancel a running or stuck scan/attack, restore the dongle and capture, clear the WPS state. |
 | `kestrel wps list` | List WPS-recovered keys (also on the Loot page). |
 
 ### Evil-portal

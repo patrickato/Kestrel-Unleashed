@@ -882,6 +882,13 @@ def create_app(daemon):
                 return html(_render_wps(daemon, control(), just_launched=True))
             return html(_render_wps(daemon, ctl, error=True,
                         message=reply.get("error") or "not applied"), 400)
+        if action == "stop":
+            reply = apply_change({"target": "wps", "action": "stop"})
+            if reply.get("ok"):
+                return html(_render_wps(daemon, control(),
+                            message="WPS run stopped."))
+            return html(_render_wps(daemon, ctl, error=True,
+                        message=reply.get("error") or "not applied"), 400)
         if action == "attack":
             bssid = (request.form.get("bssid") or "").strip().upper()
             if not _WPS_MAC_RE.match(bssid):
@@ -3105,6 +3112,14 @@ def _render_wps(daemon, control=None, message=None, error=False,
             + '<input type="hidden" name="action" value="scan">'
             + '<button type="submit"' + (" disabled" if busy else "")
             + ">Scan for WPS APs</button></form>")
+        if busy:
+            # A Stop so a running (or stuck) scan/attack can be cancelled from the
+            # page -- it also restores the dongle and clears the state.
+            scan_form += (
+                '<form class="inline" method="post" action="'
+                + _esc(_url("/wps", control)) + '">' + _csrf_field(control)
+                + '<input type="hidden" name="action" value="stop">'
+                + '<button type="submit" class="danger">Stop</button></form>')
     else:
         scan_form = ('<p class="hint">Turn web controls on to scan and attack '
                      "from here (they use the device login): <code>sudo kestrel "
