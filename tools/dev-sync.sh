@@ -64,5 +64,9 @@ echo "dev-sync: reloading units and bouncing services ..."
 systemctl daemon-reload
 systemctl restart kestrel-daemon.service || true
 systemctl restart kestrel-crack.service || true
+# try-restart only bounces a unit if it is currently running, so an on-demand
+# service (evil-portal) picks up new code when active but isn't started here.
+systemctl try-restart kestrel-evil-portal.service kestrel-agent.service \
+    kestrel-kiosk.service 2>/dev/null || true
 
 echo "dev-sync: done (app-layer only; apt/pip/boot changes still need a reflash)."
