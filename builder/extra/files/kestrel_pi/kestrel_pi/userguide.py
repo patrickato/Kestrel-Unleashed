@@ -341,7 +341,7 @@ The Pi's CPU cracks slowly — around a thousand guesses a second — and it can
 
 On the **Loot** page (dashboard login on), open **GPU offload**:
 
-1. **Download GPU crack kit (.zip)** — a small zip with the still-uncracked networks (PMKID included) and ready-to-run scripts.
+1. **Download a GPU crack kit (.zip)** — a small zip with the uncracked networks (PMKID included) and ready-to-run scripts. Three choices for what to carry: **All uncracked**, **Exhausted / PMKID only** (just what the Pi gave up on — it tried every wordlist, or can't crack a PMKID at all — the highest-value hand-off), or **Untried only** (networks no wordlist has run against yet).
 2. On a machine with a GPU, install [hashcat](https://hashcat.net/hashcat/), unzip the kit, drop a wordlist next to it named `wordlist.txt` (rockyou is a fine start), and run `crack.bat` (Windows) or `./crack.sh` (Linux/Mac). The script runs the wordlist and then, automatically, the default-key masks the Pi deferred as too slow for its CPU (shipped in the kit as `masks.hcmask`) — the 8-digit ISP/printer sweeps the GPU finishes in minutes. The README inside spells it out.
 3. The script writes `recovered.txt`. Back on the Loot page, use **Ingest results** to upload it.
 
@@ -349,6 +349,7 @@ The recovered keys then appear in the loot, light up on the map, and each one is
 
 ```bash
 kestrel crack kit                    # build the kit (prints the .zip path)
+kestrel crack kit --subset exhausted # only what the Pi gave up on (or: untried)
 # ... copy it to the GPU box, run crack.bat/crack.sh, bring recovered.txt back ...
 kestrel crack ingest recovered.txt   # apply the results
 ```
@@ -532,6 +533,7 @@ Copies the recovered keys and the capture store onto a USB stick the moment you 
 - Label a stick: in your file manager set its volume label to `KESTREL` (or `sudo e2label /dev/sdX1 KESTREL` / `sudo fatlabel /dev/sdX1 KESTREL`).
 - Enable: `sudo kestrel plugins enable usb-dump`
 - Option `label` (default `KESTREL`): the filesystem label a stick must have to be dumped to. The dashboard card shows whether a stick is present and the last dump result.
+- Option `kit` (default `off`): also drop a ready-to-run **GPU crack kit** onto the stick — set it to `all`, `exhausted`, or `untried` (the same subsets as the GPU offload above) and each dump stages that kit alongside the stores, so you can carry it straight to a GPU box.
 
 ### auto-uplink (fall back to a saved Wi-Fi uplink)
 

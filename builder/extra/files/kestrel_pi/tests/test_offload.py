@@ -113,6 +113,41 @@ def test_uncracked_hashlines_filters_cracked(tmp_path):
     assert len(lines) == 1 and "aabbccddee02" in lines[0]
 
 
+def test_kit_target_bssids_subsets():
+    aps = {
+        "AA:BB:CC:DD:EE:01": {"password": "x"},                       # cracked
+        "AA:BB:CC:DD:EE:02": {"status": "pending", "tried": []},       # untried
+        "AA:BB:CC:DD:EE:03": {"status": "pending", "tried": ["s:1"]},  # tried, not done
+        "AA:BB:CC:DD:EE:04": {"status": "exhausted", "tried": ["s:1"]},
+        "AA:BB:CC:DD:EE:05": {"status": "no-handshake", "tried": []},  # PMKID-only
+    }
+    assert offload.kit_target_bssids(aps, "all") is None              # 'all' = no filter
+    assert offload.kit_target_bssids(aps, "exhausted") == {
+        "AA:BB:CC:DD:EE:04", "AA:BB:CC:DD:EE:05"}                     # given-up + PMKID
+    assert offload.kit_target_bssids(aps, "untried") == {
+        "AA:BB:CC:DD:EE:02"}                                          # no wordlist tried
+    assert offload.kit_target_bssids(aps, "bogus") is None            # unknown -> all
+
+
+def test_build_kit_subset_filters_targets(tmp_path):
+    store = tmp_path / "store"
+    store.mkdir()
+    cap = _store(store, [("aabbccddee02", "Untried"),
+                         ("aabbccddee04", "Exhausted")])
+    aps = {"AA:BB:CC:DD:EE:02": {"status": "pending", "tried": []},
+           "AA:BB:CC:DD:EE:04": {"status": "exhausted", "tried": ["s:1"]}}
+    rd = cap.read_events
+    hf = cap.hashline_files()
+    all_kit = offload.build_kit(str(tmp_path / "k_all"), hf, aps, rd, subset="all")
+    assert all_kit["targets"] == 2 and all_kit["subset"] == "all"
+    exh = offload.build_kit(str(tmp_path / "k_exh"), hf, aps, rd, subset="exhausted")
+    lines = open(exh["files"]["targets.hc22000"]).read()
+    assert exh["targets"] == 1 and "aabbccddee04" in lines and "aabbccddee02" not in lines
+    unt = offload.build_kit(str(tmp_path / "k_unt"), hf, aps, rd, subset="untried")
+    lines = open(unt["files"]["targets.hc22000"]).read()
+    assert unt["targets"] == 1 and "aabbccddee02" in lines and "aabbccddee04" not in lines
+
+
 def test_build_kit_writes_targets_scripts_and_readme(tmp_path):
     store = tmp_path / "store"
     store.mkdir()

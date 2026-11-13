@@ -77,9 +77,12 @@ Usage: $PROG <command>
                      Queue a manual crack of one or more capture files (re-run
                      what didn't crack against another wordlist/ruleset, or a
                      brute-force mask); omit --wordlist for all lists
-  crack kit [DIR]    Build a GPU crack kit (uncracked hashlines + hashcat scripts,
+  crack kit [DIR] [--subset all|exhausted|untried]
+                     Build a GPU crack kit (uncracked hashlines + hashcat scripts,
                      zipped) to crack on a real GPU -- ~1000x faster, and the only
-                     way to crack PMKID; no SSH/keys, works fully offline
+                     way to crack PMKID; no SSH/keys, works fully offline. --subset
+                     picks which APs to carry (default all; exhausted = what the
+                     Pi gave up on + PMKID; untried = not yet tried)
   crack ingest FILE  Apply a GPU box's results (recovered.txt) back into the loot
   crack enable       Enable quick-crack (auto-crack new handshakes); disable to stop
   crack pause        Soft-pause the worker (finishes the current job, then holds)
@@ -1918,34 +1921,43 @@ cmd_crack_kit() {
     # ready-to-run hashcat scripts + README, zipped for the trip to a GPU box. The
     # zero-config, air-gap-friendly offload path -- no SSH, no keys; you move the
     # files. Runs as pi, writes into the pi-owned crack dir.
-    local out_dir="$PWN_CRACK_DIR/gpu-kit"
-    [ $# -gt 0 ] && { out_dir=$1; shift; }
-    [ $# -eq 0 ] || die "usage: $PROG crack kit [DIR]"
+    local out_dir="$PWN_CRACK_DIR/gpu-kit" subset="all"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --subset|-s) subset=$2; shift 2 ;;
+            --*) die "unknown option for 'crack kit': $1" ;;
+            *) out_dir=$1; shift ;;
+        esac
+    done
+    case "$subset" in all|exhausted|untried) ;; *) die "subset must be all|exhausted|untried" ;; esac
     local result
     result=$(run_as_pi "$PWN_VENV_PYTHON" -I -c '
 import sys, zipfile
 from kestrel_pi.capture import CaptureInterface
 from kestrel_pi.crack import offload
 from kestrel_pi.crack.store import LootStore
-store_dir, crack_dir, out_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+store_dir, crack_dir, out_dir, subset = sys.argv[1:5]
 cap = CaptureInterface(store_dir)
 aps = LootStore(crack_dir).load()
-res = offload.build_kit(out_dir, cap.hashline_files(), aps, cap.read_events)
+res = offload.build_kit(out_dir, cap.hashline_files(), aps, cap.read_events,
+                        subset=subset)
 zip_path = out_dir.rstrip("/") + ".zip"
 with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
     for name, p in res["files"].items():
         z.write(p, name)
 print("%d" % res["targets"]); print(zip_path)
-' "$PWN_CAPTURE_DIR" "$PWN_CRACK_DIR" "$out_dir") || die "could not build the kit"
+' "$PWN_CAPTURE_DIR" "$PWN_CRACK_DIR" "$out_dir" "$subset") || die "could not build the kit"
     local targets zip_path
     targets=$(printf '%s\n' "$result" | sed -n '1p')
     zip_path=$(printf '%s\n' "$result" | sed -n '2p')
+    local scope="uncracked"
+    [ "$subset" = all ] || scope="$subset"
     if [ "$targets" = "0" ]; then
-        echo "Nothing left to crack -- every captured network is already cracked."
+        echo "Nothing to put in the kit for the '$scope' subset right now."
         echo "(An empty kit was still written to $zip_path.)"
         return 0
     fi
-    echo "Built a GPU crack kit: $targets network(s) still to crack (PMKID included)."
+    echo "Built a GPU crack kit ($scope): $targets network(s) to crack (PMKID included)."
     echo "  $zip_path"
     echo
     echo "Next: copy that .zip to a machine with a GPU, unzip it, and run crack.bat"

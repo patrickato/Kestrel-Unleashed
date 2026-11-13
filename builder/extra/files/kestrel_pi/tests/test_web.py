@@ -3030,10 +3030,13 @@ def test_loot_gpu_offload_section_download_and_ingest(monkeypatch, tmp_path):
     client = web.create_app(
         _loot_daemon(tmp_path, wl_dir, cap_dir, capfile)).test_client()
 
-    # the Loot page shows the GPU-offload section with its controls (auth on)
+    # the Loot page shows the GPU-offload section with its controls (auth on),
+    # including the three subset choices
     body = client.get("/loot", headers=_basic()).get_data(as_text=True)
     assert "GPU offload" in body
-    assert "Download GPU crack kit" in body and "Ingest results" in body
+    assert "Download a GPU crack kit" in body and "Ingest results" in body
+    assert "All uncracked" in body and "Exhausted / PMKID only" in body
+    assert "Untried only" in body and "subset=exhausted" in body
 
     # the kit downloads as a zip
     kit = client.get("/loot/gpu-kit", headers=_basic())
@@ -3041,6 +3044,12 @@ def test_loot_gpu_offload_section_download_and_ingest(monkeypatch, tmp_path):
     assert kit.headers["Content-Type"] == "application/zip"
     assert "attachment" in kit.headers["Content-Disposition"]
     assert kit.get_data()[:2] == b"PK"           # zip magic
+
+    # a subset kit names the file accordingly (and is still a valid zip)
+    exh = client.get("/loot/gpu-kit?subset=exhausted", headers=_basic())
+    assert exh.status_code == 200
+    assert "kestrel-gpu-kit-exhausted.zip" in exh.headers["Content-Disposition"]
+    assert exh.get_data()[:2] == b"PK"
 
     # ingest the recovered.txt a GPU box would produce; it lands in the reconcile
     # file and a worker pass would mark the record cracked

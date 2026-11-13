@@ -861,17 +861,22 @@ def create_app(daemon):
         import io
         import zipfile
         from .crack import offload as crack_offload
+        subset = request.args.get("subset") or "all"
+        if subset not in crack_offload.SUBSETS:
+            subset = "all"
         aps = crack_store.LootStore(CRACK_DIR).load()
         res = crack_offload.build_kit(os.path.join(CRACK_DIR, "gpu-kit"),
                                       daemon.capture.hashline_files(), aps,
-                                      daemon.capture.read_events)
+                                      daemon.capture.read_events, subset=subset)
+        suffix = "" if subset == "all" else "-" + subset
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             for name, path in res["files"].items():
                 zf.write(path, name)
         return Response(buf.getvalue(), headers={
             "Content-Type": "application/zip",
-            "Content-Disposition": 'attachment; filename="kestrel-gpu-kit.zip"',
+            "Content-Disposition": ('attachment; filename="kestrel-gpu-kit%s.zip"'
+                                    % suffix),
             "Cache-Control": "no-store"})
 
     @app.post("/loot/ingest")
@@ -3108,14 +3113,29 @@ def _loot_gpu_section(control=None):
         "Nothing leaves the device on its own &mdash; you move the files, so it "
         "works even fully offline.</p>")
     if ready:
-        kit_url = _esc(_url("/loot/gpu-kit", control))
         csrf = _esc((control or {}).get("csrf") or "")
         action = _esc(_url("/loot/ingest", control))
+        # Three subset choices for the kit: everything uncracked (default), only
+        # what the Pi has given up on (exhausted / PMKID it can't crack), or only
+        # what it hasn't tried yet. Each is a plain download link.
+        _btn = ("display:inline-block;margin:.2em .4em .2em 0;padding:.5em 1em;"
+                "border:1px solid var(--border);border-radius:8px;"
+                "text-decoration:none;color:var(--link);background:var(--card)")
+        _kit_base = _url("/loot/gpu-kit", control)
+        kit_links = []
+        for sub, text in (("all", "&#8681; All uncracked"),
+                          ("exhausted", "Exhausted / PMKID only"),
+                          ("untried", "Untried only")):
+            if sub == "all":
+                href = _esc(_kit_base)
+            else:
+                joiner = "&" if "?" in _kit_base else "?"
+                href = _esc(_kit_base + joiner + "subset=" + sub)
+            kit_links.append("<a href='" + href + "' style='" + _btn + "'>"
+                             + text + "</a>")
         controls = (
-            "<p><a class='viewtabs-link' href='" + kit_url + "' "
-            "style='display:inline-block;padding:.5em 1em;border:1px solid "
-            "var(--border);border-radius:8px;text-decoration:none;color:var(--link);"
-            "background:var(--card)'>&#8681; Download GPU crack kit (.zip)</a></p>"
+            "<p>Download a GPU crack kit (.zip): "
+            + "".join(kit_links) + "</p>"
             "<form method='post' action='" + action + "' "
             "enctype='multipart/form-data' class='formrow'>"
             "<input type='hidden' name='csrf' value='" + csrf + "'>"

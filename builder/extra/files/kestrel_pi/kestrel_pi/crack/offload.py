@@ -41,6 +41,37 @@ KIT_TARGETS = "targets.hc22000"
 KIT_MASKS = "masks.hcmask"          # the deferred device default-key masks for -a 3
 KIT_RECOVERED = "recovered.txt"
 
+# Which uncracked APs a kit carries. "all" = every uncracked AP (the default and
+# the historical behaviour). "exhausted" = only the ones the Pi is out of options
+# on -- it tried every wordlist (status `exhausted`) or can't crack it at all (a
+# PMKID-only `no-handshake` AP) -- the highest-value GPU hand-off. "untried" = the
+# ones no wordlist has been tried against yet, to hand off before the Pi spends
+# time on them.
+SUBSETS = ("all", "exhausted", "untried")
+
+
+def kit_target_bssids(aps, subset="all"):
+    """The upper-case BSSIDs an uncracked-AP ``subset`` selects from the loot
+    store, or ``None`` for ``"all"`` (meaning 'every uncracked hashline', even
+    ones not yet recorded in the loot store -- the historical kit contents).
+    Cracked APs are always excluded."""
+    if subset not in SUBSETS:
+        subset = "all"
+    if subset == "all":
+        return None
+    want = set()
+    for bssid, rec in (aps or {}).items():
+        if not isinstance(rec, dict) or rec.get("password"):
+            continue
+        status = rec.get("status") or "pending"
+        if subset == "exhausted":
+            if status in ("exhausted", "no-handshake"):
+                want.add((bssid or "").upper())
+        elif subset == "untried":
+            if status != "no-handshake" and not (rec.get("tried") or []):
+                want.add((bssid or "").upper())
+    return want
+
 
 def parse_recovered(text):
     """Parse hashcat ``--show`` output (or any ``<hashline>:<password>`` text)
@@ -146,11 +177,13 @@ def reconcile(aps, crack_dir, now=None, wordlist_name="GPU offload"):
     return marked
 
 
-def uncracked_hashlines(hashline_files, aps, read_events):
+def uncracked_hashlines(hashline_files, aps, read_events, include=None):
     """Every raw hashline whose BSSID is not already cracked in ``aps`` -- the
     targets worth sending to the GPU (PMKID included, which the Pi can't crack).
     ``read_events`` is the capture view's reader (``capture.read_events``).
-    De-duplicated, order preserved."""
+    ``include`` (optional): restrict to this set of upper-case BSSIDs (a chosen
+    kit subset); ``None`` means every uncracked AP. De-duplicated, order
+    preserved."""
     cracked = {b for b, rec in (aps or {}).items()
                if isinstance(rec, dict) and rec.get("password")}
     out, seen = [], set()
@@ -164,19 +197,24 @@ def uncracked_hashlines(hashline_files, aps, read_events):
             raw = (getattr(event, "raw", "") or "").strip()
             if not raw or not bssid or bssid in cracked or raw in seen:
                 continue
+            if include is not None and bssid not in include:
+                continue
             seen.add(raw)
             out.append(raw)
     return out
 
 
-def kit_masks(aps):
+def kit_masks(aps, include=None):
     """Device-appropriate default-key masks for the still-uncracked APs: the ones
     the Pi defers as too slow for its CPU (the 8-digit sweep etc.), so the GPU
-    kit runs them where they finish in minutes. Dedup, order preserved. This is
+    kit runs them where they finish in minutes. ``include`` (optional) restricts
+    to a subset's BSSIDs, matching the targets. Dedup, order preserved. This is
     the mask half of the escalation -- the Pi hands the expensive masks here."""
     masks = []
     for bssid, rec in (aps or {}).items():
         if not isinstance(rec, dict) or rec.get("password"):
+            continue
+        if include is not None and (bssid or "").upper() not in include:
             continue
         for mask in suggest_mod.auto_masks(essid=rec.get("essid") or "",
                                            bssid=bssid,
@@ -186,21 +224,25 @@ def kit_masks(aps):
     return masks
 
 
-def build_kit(out_dir, hashline_files, aps, read_events):
+def build_kit(out_dir, hashline_files, aps, read_events, subset="all"):
     """Write a GPU crack kit into ``out_dir``: ``targets.hc22000`` (the uncracked
     hashlines), ``masks.hcmask`` (the device default-key masks the Pi deferred,
     when any), ``crack.bat`` + ``crack.sh`` (run hashcat over the wordlist then
-    the masks and emit ``recovered.txt``) and ``README.txt``. Returns
-    ``{"dir", "targets", "masks", "files"}``; ``targets`` is 0 when nothing is
-    left to crack (the kit is still written, with an empty target file and a
-    note)."""
+    the masks and emit ``recovered.txt``) and ``README.txt``. ``subset`` picks
+    which uncracked APs to carry (:data:`SUBSETS`: ``all`` / ``exhausted`` /
+    ``untried``). Returns ``{"dir", "targets", "masks", "subset", "files"}``;
+    ``targets`` is 0 when the subset has nothing left (the kit is still written,
+    with an empty target file and a note)."""
+    if subset not in SUBSETS:
+        subset = "all"
     os.makedirs(out_dir, exist_ok=True)
-    lines = uncracked_hashlines(hashline_files, aps, read_events)
+    include = kit_target_bssids(aps, subset)
+    lines = uncracked_hashlines(hashline_files, aps, read_events, include=include)
     targets_path = os.path.join(out_dir, KIT_TARGETS)
     with open(targets_path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + ("\n" if lines else ""))
     files = {KIT_TARGETS: targets_path}
-    masks = kit_masks(aps)
+    masks = kit_masks(aps, include=include)
     if masks:
         masks_path = os.path.join(out_dir, KIT_MASKS)
         with open(masks_path, "w", encoding="utf-8") as fh:
@@ -218,7 +260,7 @@ def build_kit(out_dir, hashline_files, aps, read_events):
                 pass
         files[name] = p
     return {"dir": out_dir, "targets": len(lines), "masks": len(masks),
-            "files": files}
+            "subset": subset, "files": files}
 
 
 # -- the files written into a kit (not shell files in THIS repo, so not linted;

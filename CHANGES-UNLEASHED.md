@@ -658,6 +658,31 @@ changelog. Release impact: **app-layer-safe** — pure logic, the web layer and
 the CLI; no new deps, units or config. Tests: +6; 1235 pass, 12 skipped, lint
 clean.
 
+### Added: choose what a GPU/USB offload kit carries (subset picker)
+The GPU crack kit always bundled *every* uncracked AP. Now you choose the
+subset: **all** uncracked (the default, unchanged), **exhausted** — only what the
+Pi is out of options on (it tried every wordlist, or it's a PMKID-only capture it
+can't crack at all) — the highest-value GPU hand-off, or **untried** — the ones
+no wordlist has run against yet.
+
+- `crack/offload.py`: `SUBSETS` + `kit_target_bssids(aps, subset)` (pure), and an
+  `include=` filter threaded through `uncracked_hashlines`, `kit_masks` and
+  `build_kit(..., subset=...)`. `build_kit` reports the `subset` it used.
+- `/loot` GPU-offload section: the download is now three one-tap choices (All
+  uncracked / Exhausted / PMKID only / Untried); the route takes `?subset=` and
+  names the zip accordingly.
+- CLI: `kestrel crack kit [DIR] [--subset all|exhausted|untried]`.
+- `usb-dump` plugin: a new `kit` option (`off` by default; `all`/`exhausted`/
+  `untried`) stages that kit into the crack dir on each dump, so the auto-copy
+  carries a ready-to-run GPU kit onto the stick — the offline offload path with
+  the same subset choice.
+
+Touched: `crack/offload.py`, `web.py`, `kestrel.sh`, `plugins/usb-dump.py`,
+`userguide.py`, tests, changelog. Release impact: **app-layer-safe** — pure
+logic, the web layer, the CLI and a plugin; the new plugin option defaults to
+`off` (no config.toml change), so existing devices are unchanged until set.
+Tests: +2; 1237 pass, 12 skipped, lint clean.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

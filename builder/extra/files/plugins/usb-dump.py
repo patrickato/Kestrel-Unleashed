@@ -13,10 +13,13 @@ Target Python 3.11.
 
 from __future__ import annotations
 
+import os
 import threading
 
 from kestrel_pi import Plugin
 from kestrel_pi import usbdump
+from kestrel_pi.crack import CRACK_DIR, offload
+from kestrel_pi.crack.store import LootStore
 
 
 class UsbDump(Plugin):
@@ -31,6 +34,10 @@ class UsbDump(Plugin):
     __options__ = {
         # The filesystem label a stick must have to be dumped to.
         "label": {"type": "str", "default": "KESTREL"},
+        # Also drop a ready-to-run GPU crack kit of a chosen subset onto the
+        # stick: "off" (just copy the stores), or "all" / "exhausted" / "untried"
+        # (the offload subsets — exhausted = what the Pi gave up on + PMKID).
+        "kit": {"type": "str", "default": "off"},
     }
 
     def on_loaded(self):
@@ -49,6 +56,7 @@ class UsbDump(Plugin):
         self._present = present
 
     def _dump(self, label):
+        self._maybe_build_kit()
         reply = self.context.apply({"target": "usb-dump", "label": label})
         if reply.get("ok"):
             msg = "copied to %s" % reply.get("usb_dump")
@@ -58,6 +66,24 @@ class UsbDump(Plugin):
             self.log.warning("usb-dump: %s", msg)
         with self._lock:
             self._last = msg
+
+    def _maybe_build_kit(self):
+        """Build a GPU crack kit of the configured subset into the crack dir so
+        it is copied onto the stick with the rest of the loot. Best-effort: a kit
+        failure must never block the plain dump."""
+        subset = str(self.options.get("kit") or "off").lower()
+        if subset not in offload.SUBSETS:
+            return                         # "off" or anything unknown: no kit
+        try:
+            cap = self.context.capture
+            aps = LootStore(CRACK_DIR).load()
+            res = offload.build_kit(os.path.join(CRACK_DIR, "gpu-kit"),
+                                    cap.hashline_files(), aps, cap.read_events,
+                                    subset=subset)
+            self.log.info("usb-dump: staged a %s GPU kit (%d target(s)) for the "
+                          "stick", subset, res["targets"])
+        except Exception as exc:  # noqa: BLE001 - never let a kit block the dump
+            self.log.warning("usb-dump: could not build the GPU kit: %s", exc)
 
     # -- dashboard readout ----------------------------------------------
     def on_ui_setup(self, ui):
