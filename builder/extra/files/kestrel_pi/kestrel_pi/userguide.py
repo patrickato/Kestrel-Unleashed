@@ -426,7 +426,7 @@ sudo kestrel plugins enable gps --set source=serial --set device=/dev/ttyACM0
 
 Run in a terminal, `plugins enable` also walks you through the options (secrets are masked). To change an option later, re-run `plugins enable <name> --set key=value` with the new value (or edit it on the plugin's web config page). Enabling does not require a reboot or even a daemon restart for the common cases. Disable with `sudo kestrel plugins disable <name>`, or the Disable control on the dashboard.
 
-The authorized-use acknowledgment: any plugin that sends data off the device (the `network` capability: `wpa-sec`, `wigle`, `backup`, `remote-train`, `remote-crack`, and `updates`) takes the same explicit authorized-use acknowledgment as capture before it turns on, whether you enable it from the dashboard or the terminal. In a terminal you are prompted; add `--yes` for scripts. The acknowledgment is remembered device-wide, so once you have enabled capture it is silent afterward. Local-only plugins (`memtemp`, `session-stats`, `ups-hat`, `eink`, `map`, and `gps` reading a local receiver) never need it.
+The authorized-use acknowledgment: any plugin that sends data off the device (the `network` capability: `wpa-sec`, `wigle`, `backup`, `remote-train`, `remote-crack`, and `updates`) takes the same explicit authorized-use acknowledgment as capture before it turns on, whether you enable it from the dashboard or the terminal. In a terminal you are prompted; add `--yes` for scripts. The acknowledgment is remembered device-wide, so once you have enabled capture it is silent afterward. Local-only plugins (`memtemp`, `session-stats`, `ups-hat`, `eink`, `map`, `auto-whitelist`, and `gps` reading a local receiver) never need it.
 
 Where things live: bundled plugins are in `/usr/local/lib/kestrel/plugins/`; your own overrides go in `/etc/kestrel/plugins/` (a plugin there with the same name takes precedence). Each plugin has a `[plugins.<name>]` table in `config.toml`; prefer the dashboard or the CLI over hand-editing. If a plugin shows an error, `sudo kestrel plugins info <name>` reports its health and `sudo journalctl -u kestrel-daemon` shows why it failed to load. A failed plugin never stops the daemon or the others. A plugin you add must subclass `Plugin` directly and write its declarations (`__options__`, `__capabilities__` and the like) as plain literals, because the device reads them without running the plugin; one that doesn't is listed as `invalid` by `kestrel plugins list` and is not loaded. The older `@plugins.on` decorator style is not supported.
 
@@ -445,6 +445,14 @@ A local-only card counting activity for the current daemon session: handshakes s
 
 - Enable: `sudo kestrel plugins enable session-stats`
 - No options. It also serves a tiny page and JSON feed on the management link at `/plugins/session-stats/`.
+
+### auto-whitelist (stop attacking a confirmed AP)
+
+A local-only plugin that adds an access point to the capture whitelist once Kestrel has verified, crackable material for it, so the device stops deauthing an AP it has already beaten and spends its effort on the ones it hasn't. "Confirmed" means a true 4-way handshake the AP itself completed (an M2+M3 / M3+M4 message pair) or a clientless PMKID — the same badge you see on the by-access-point view. An AP with only a partial, client-side handshake is left alone, so Kestrel keeps trying for a real one. It watches handshakes while enabled (an AP already in your backlog is whitelisted the next time it produces a handshake, which in range is soon), and it only ever *reduces* attacking, so it transmits nothing and needs no authorized-use acknowledgment. The dashboard card shows how many APs it has auto-whitelisted this session; the whitelist change takes effect the next time capture restarts, exactly like a manual whitelist add.
+
+- Enable: `sudo kestrel plugins enable auto-whitelist`
+- Option `count_pmkid` (default `true`): treat a clientless PMKID as confirmed. Set `--set count_pmkid=false` to whitelist only on a captured 4-way.
+- Option `require_ap_confirmed` (default `true`): require the 4-way to be AP-confirmed (the AP replied). Set `--set require_ap_confirmed=false` to accept any captured 4-way.
 
 ### gps (position source)
 
