@@ -37,8 +37,10 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 try:
@@ -831,6 +833,64 @@ _PSK_RE = re.compile(r"\A(?:[\x20-\x7e]{8,63}|[0-9A-Fa-f]{64})\Z")
 _SSID_RE = re.compile(r"\A(?!-)[^\x00-\x1f]{1,32}\Z")
 
 
+# USB auto-dump: copy these stores to a labelled stick (source -> subdir).
+_USB_LABEL_RE = re.compile(r"\A[A-Za-z0-9_-]{1,32}\Z")
+_USB_SOURCES = (("/var/lib/kestrel/crack", "loot"),
+                ("/var/lib/kestrel/capture", "capture"))
+
+
+def apply_usb_dump(change):
+    """Copy the loot + capture store to a labelled USB stick:
+
+      {"target": "usb-dump", "label": "KESTREL"}
+
+    Mounts ``/dev/disk/by-label/<label>``, copies both stores into a timestamped
+    directory, syncs and unmounts. Operator automation (the usb-dump plugin fires
+    it when a matching stick is inserted); a physically-inserted operator stick,
+    no key and no web control, so it works headless."""
+    label = change.get("label")
+    if not isinstance(label, str) or not _USB_LABEL_RE.match(label):
+        return {"ok": False, "error": "invalid USB label"}
+    dev = "/dev/disk/by-label/" + label
+    if not os.path.exists(dev):
+        return {"ok": False, "error": "no USB stick labelled %r is present" % label}
+    mnt = tempfile.mkdtemp(prefix="kestrel-usb-")
+    dest_name = "kestrel-" + time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    try:
+        m = subprocess.run(["/usr/bin/mount", dev, mnt], capture_output=True,
+                           text=True, timeout=30, check=False,
+                           stdin=subprocess.DEVNULL)
+        if m.returncode != 0:
+            return {"ok": False,
+                    "error": ("could not mount the stick: "
+                              + (m.stderr or "").strip())[:200]}
+        copied = 0
+        dest = os.path.join(mnt, dest_name)
+        try:
+            for src, sub in _USB_SOURCES:
+                if os.path.isdir(src):
+                    shutil.copytree(src, os.path.join(dest, sub))
+                    copied += 1
+            subprocess.run(["/usr/bin/sync"], timeout=30, check=False,
+                           stdin=subprocess.DEVNULL)
+        finally:
+            subprocess.run(["/usr/bin/umount", mnt], capture_output=True,
+                           timeout=30, check=False, stdin=subprocess.DEVNULL)
+        if not copied:
+            return {"ok": False,
+                    "error": "nothing to dump (no loot or capture store yet)"}
+        sys.stderr.write("plugins-ctl apply: usb-dump %s -> %s\n"
+                         % (label, dest_name))
+        return {"ok": True, "usb_dump": dest_name, "copied": copied}
+    except OSError as exc:
+        return {"ok": False, "error": "usb-dump failed: %s" % exc}
+    finally:
+        try:
+            os.rmdir(mnt)
+        except OSError:
+            pass
+
+
 def apply_wifi_up(change):
     """Bring up a saved Wi-Fi connection by name, for the auto-uplink fallback:
 
@@ -1210,6 +1270,10 @@ def apply_change(change):
         # auto-uplink bringing up an operator-saved profile when offline; no key,
         # no new privilege (NM already autoconnects these), so allowed headless.
         return apply_wifi_up(change)
+    if change.get("target") == "usb-dump":
+        # usb-dump plugin copying the stores to an inserted operator stick;
+        # physical, no key, no web control, so allowed headless.
+        return apply_usb_dump(change)
     if change.get("target") == "capture-whitelist" and change.get("action") == "add":
         return apply_capture_whitelist(change)
     if not web_control_ready(config):

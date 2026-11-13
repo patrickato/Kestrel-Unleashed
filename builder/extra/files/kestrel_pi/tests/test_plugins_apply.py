@@ -63,7 +63,7 @@ def test_declarations_read_statically(env):
                             "wpa-sec", "backup", "ups-hat", "updates",
                             "remote-train", "eink", "map", "remote-crack",
                             "auto-whitelist", "wardrive", "onlinehashcrack",
-                            "locator", "auto-uplink"}
+                            "locator", "auto-uplink", "usb-dump"}
     wpa, _src = plugins["wpa-sec"]
     assert "network" in wpa["capabilities"]
     assert wpa["options"]["api_key"] == {"type": "str", "required": True, "secret": True}
@@ -1277,3 +1277,12 @@ def test_wifi_up_runs_nmcli_and_is_allowed_headless(env, monkeypatch):
 def test_wifi_up_rejects_a_bad_name():
     assert ctl.apply_wifi_up({"name": "-bad"})["ok"] is False
     assert ctl.apply_wifi_up({"name": ""})["ok"] is False
+
+
+def test_usb_dump_validates_label_and_presence(monkeypatch):
+    assert ctl.apply_usb_dump({"label": "bad label"})["ok"] is False
+    assert ctl.apply_usb_dump({"label": ""})["ok"] is False
+    # valid label but no stick present -> refused before any mount
+    monkeypatch.setattr(ctl.os.path, "exists", lambda p: False)
+    reply = ctl.apply_usb_dump({"label": "KESTREL"})
+    assert reply["ok"] is False and "no USB stick" in reply["error"]

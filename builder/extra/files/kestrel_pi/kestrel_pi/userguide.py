@@ -440,7 +440,7 @@ sudo kestrel plugins enable gps --set source=serial --set device=/dev/ttyACM0
 
 Run in a terminal, `plugins enable` also walks you through the options (secrets are masked). To change an option later, re-run `plugins enable <name> --set key=value` with the new value (or edit it on the plugin's web config page). Enabling does not require a reboot or even a daemon restart for the common cases. Disable with `sudo kestrel plugins disable <name>`, or the Disable control on the dashboard.
 
-The authorized-use acknowledgment: any plugin that sends data off the device (the `network` capability: `wpa-sec`, `onlinehashcrack`, `wigle`, `backup`, `remote-train`, `remote-crack`, and `updates`) takes the same explicit authorized-use acknowledgment as capture before it turns on, whether you enable it from the dashboard or the terminal. In a terminal you are prompted; add `--yes` for scripts. The acknowledgment is remembered device-wide, so once you have enabled capture it is silent afterward. Local-only plugins (`memtemp`, `session-stats`, `ups-hat`, `eink`, `map`, `wardrive`, `auto-whitelist`, `locator`, `auto-uplink`, and `gps` reading a local receiver) never need it.
+The authorized-use acknowledgment: any plugin that sends data off the device (the `network` capability: `wpa-sec`, `onlinehashcrack`, `wigle`, `backup`, `remote-train`, `remote-crack`, and `updates`) takes the same explicit authorized-use acknowledgment as capture before it turns on, whether you enable it from the dashboard or the terminal. In a terminal you are prompted; add `--yes` for scripts. The acknowledgment is remembered device-wide, so once you have enabled capture it is silent afterward. Local-only plugins (`memtemp`, `session-stats`, `ups-hat`, `eink`, `map`, `wardrive`, `auto-whitelist`, `locator`, `auto-uplink`, `usb-dump`, and `gps` reading a local receiver) never need it.
 
 Where things live: bundled plugins are in `/usr/local/lib/kestrel/plugins/`; your own overrides go in `/etc/kestrel/plugins/` (a plugin there with the same name takes precedence). Each plugin has a `[plugins.<name>]` table in `config.toml`; prefer the dashboard or the CLI over hand-editing. If a plugin shows an error, `sudo kestrel plugins info <name>` reports its health and `sudo journalctl -u kestrel-daemon` shows why it failed to load. A failed plugin never stops the daemon or the others. A plugin you add must subclass `Plugin` directly and write its declarations (`__options__`, `__capabilities__` and the like) as plain literals, because the device reads them without running the plugin; one that doesn't is listed as `invalid` by `kestrel plugins list` and is not loaded. The older `@plugins.on` decorator style is not supported.
 
@@ -509,6 +509,14 @@ The map's companion: where the map shows you *where*, the scoreboard shows you *
 - Enable: `sudo kestrel plugins enable wardrive`
 - A dashboard card shows the headline numbers (networks, access points, strong material, cracked, mapped, route); the **Scoreboard** button on the Plugins page opens the full breakdown.
 - No options — it reflects whatever capture, `gps` and the cracker have produced.
+
+### usb-dump (grab the loot on a USB stick)
+
+Copies the recovered keys and the capture store onto a USB stick the moment you plug one in — a quick field grab with no keyboard and no network. Label a stick `KESTREL` (any FAT/ext filesystem), insert it, and the plugin mounts it, copies both stores into a timestamped folder, and unmounts it. It fires once per insertion, so a stick left in is not copied over and over. Everything stays local (a physical stick you inserted), so no authorized-use acknowledgment.
+
+- Label a stick: in your file manager set its volume label to `KESTREL` (or `sudo e2label /dev/sdX1 KESTREL` / `sudo fatlabel /dev/sdX1 KESTREL`).
+- Enable: `sudo kestrel plugins enable usb-dump`
+- Option `label` (default `KESTREL`): the filesystem label a stick must have to be dumped to. The dashboard card shows whether a stick is present and the last dump result.
 
 ### auto-uplink (fall back to a saved Wi-Fi uplink)
 
