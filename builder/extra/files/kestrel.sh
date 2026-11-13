@@ -78,6 +78,10 @@ Usage: $PROG <command>
                      way to crack PMKID; no SSH/keys, works fully offline
   crack ingest FILE  Apply a GPU box's results (recovered.txt) back into the loot
   crack enable       Enable quick-crack (auto-crack new handshakes); disable to stop
+  crack pause        Soft-pause the worker (finishes the current job, then holds)
+  crack resume       Resume after a pause
+  crack queue        Show the pending manual-job queue
+  crack clear-queue  Remove all pending queued jobs (current job unaffected)
   crack clear --yes  Clear the loot store (captures and wordlists untouched)
   wps                List WPS results (recovered keys show on /loot too)
   wps scan [--seconds N]     Scan for WPS-enabled APs (uses the dongle; pauses capture)
@@ -2025,9 +2029,48 @@ cmd_crack() {
         ingest) cmd_crack_ingest "$@" ;;
         enable) cmd_crack_enable ;;
         disable) cmd_crack_disable ;;
+        pause) cmd_crack_pause ;;
+        resume) cmd_crack_resume ;;
+        queue) cmd_crack_queue ;;
+        clear-queue) cmd_crack_clear_queue ;;
         clear) cmd_crack_clear "$@" ;;
-        *) die "unknown 'crack' subcommand: $sub (status|watch|list|show|suggest|wordlists|run|kit|ingest|enable|disable|clear)" ;;
+        *) die "unknown 'crack' subcommand: $sub (status|watch|list|show|suggest|wordlists|run|kit|ingest|enable|disable|pause|resume|queue|clear-queue|clear)" ;;
     esac
+}
+
+# Soft pause/resume of the crack worker (distinct from enable/disable, which is
+# the hard config off). The worker finishes the current job, then idles until
+# resumed. State lives in the pi-owned crack dir, so no root is needed.
+cmd_crack_pause() {
+    run_as_pi "$PWN_VENV_PYTHON" -I -c 'from kestrel_pi.crack import store, CRACK_DIR; store.set_paused(CRACK_DIR, True)'
+    log "crack worker paused (resume with: $PROG crack resume)"
+}
+
+cmd_crack_resume() {
+    run_as_pi "$PWN_VENV_PYTHON" -I -c 'from kestrel_pi.crack import store, CRACK_DIR; store.set_paused(CRACK_DIR, False)'
+    log "crack worker resumed"
+}
+
+# Show the pending manual-job queue (what is lined up, oldest first).
+cmd_crack_queue() {
+    run_as_pi "$PWN_VENV_PYTHON" -I -c '
+from kestrel_pi.crack import store, CRACK_DIR
+jobs = store.list_jobs(CRACK_DIR)
+if not jobs:
+    print("queue is empty")
+else:
+    print("%d job(s) queued:" % len(jobs))
+    for i, (_p, j) in enumerate(jobs, 1):
+        how = ("mask " + j["mask"]) if j.get("mask") else (j.get("wordlist") or "all lists")
+        print("  %d. %s  [%s]  %d file(s)" % (i, j.get("label") or j.get("origin") or "manual", how, len(j.get("files") or [])))
+'
+}
+
+cmd_crack_clear_queue() {
+    run_as_pi "$PWN_VENV_PYTHON" -I -c '
+from kestrel_pi.crack import store, CRACK_DIR
+print("cleared %d queued job(s)" % store.clear_queue(CRACK_DIR))
+'
 }
 
 ## kiosk (Kestrel-Unleashed on-device HDMI touchscreen dashboard) ###########

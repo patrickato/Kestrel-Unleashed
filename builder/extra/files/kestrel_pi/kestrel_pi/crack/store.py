@@ -329,3 +329,40 @@ def remove_job(path):
         os.remove(path)
     except OSError:
         pass
+
+
+def clear_queue(crack_dir):
+    """Remove every pending manual job. Returns how many were cleared. The job
+    currently running (already claimed by the worker) is not in the queue dir, so
+    it is unaffected."""
+    jobs = list_jobs(crack_dir)
+    for path, _job in jobs:
+        remove_job(path)
+    return len(jobs)
+
+
+# -- worker control (operator pause) ----------------------------------------
+CONTROL_NAME = "control.json"
+
+
+def control_path(crack_dir):
+    return os.path.join(crack_dir, CONTROL_NAME)
+
+
+def read_control(crack_dir):
+    """The operator control state: ``{"paused": bool}``. Missing/corrupt = not
+    paused. Separate from the ``[crack] enabled`` config toggle (a hard off);
+    pause is a soft, operator-set hold the worker checks each loop."""
+    data = _read_json(control_path(crack_dir), None)
+    if not isinstance(data, dict):
+        return {"paused": False}
+    return {"paused": bool(data.get("paused", False))}
+
+
+def set_paused(crack_dir, paused):
+    """Pause or resume the worker. Written by the daemon/CLI (both pi); the
+    worker (also pi) reads it. Returns the new state."""
+    os.makedirs(crack_dir, exist_ok=True)
+    _write_json_atomic(control_path(crack_dir), {"paused": bool(paused)},
+                       world_readable=True)
+    return bool(paused)

@@ -686,3 +686,21 @@ def test_wpa_sec_potfile_merges_onto_loot(tmp_path):
     assert aps[AP1C]["password"] == "coffee99"
     assert aps[AP1C]["essid"] == "Cafe Wifi"
     assert aps["FF:EE:DD:CC:BB:AA"]["password"] == "lol"
+
+
+# -- worker control: pause + queue management -------------------------------
+def test_queue_clear_and_pause_controls(tmp_path):
+    crack = str(tmp_path)
+    store_mod.enqueue_job(crack, ["/x/a.hc22000"], wordlist="rockyou.txt", label="j1")
+    store_mod.enqueue_job(crack, ["/x/b.hc22000"], mask="?d?d?d?d", label="j2")
+    assert store_mod.queue_len(crack) == 2
+    # pause / resume roundtrip (default is not paused)
+    assert store_mod.read_control(crack) == {"paused": False}
+    store_mod.set_paused(crack, True)
+    assert store_mod.read_control(crack)["paused"] is True
+    store_mod.set_paused(crack, False)
+    assert store_mod.read_control(crack)["paused"] is False
+    # clearing removes every pending job
+    assert store_mod.clear_queue(crack) == 2
+    assert store_mod.queue_len(crack) == 0
+    assert store_mod.clear_queue(crack) == 0   # idempotent

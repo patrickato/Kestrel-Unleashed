@@ -663,6 +663,22 @@ def create_app(daemon):
             return _loot_redirect(ctl, "This page is out of date (the daemon "
                                   "restarted); try again.", err=True)
 
+        # Crack worker control: soft pause/resume, or clear the pending queue.
+        # The crack dir is pi-owned, so a direct write like the queue below.
+        if request.form.get("action") == "crack-control":
+            which = request.form.get("ctl")
+            if which == "pause":
+                crack_store.set_paused(CRACK_DIR, True)
+                return _loot_redirect(ctl, "Crack worker paused (current job "
+                                      "finishes, then it holds).")
+            if which == "resume":
+                crack_store.set_paused(CRACK_DIR, False)
+                return _loot_redirect(ctl, "Crack worker resumed.")
+            if which == "clear-queue":
+                n = crack_store.clear_queue(CRACK_DIR)
+                return _loot_redirect(ctl, "Cleared %d queued job(s)." % n)
+            return _loot_redirect(ctl, "Nothing changed.")
+
         # Connect / disconnect the station Wi-Fi to a cracked network (the loot
         # table's Connect control, for a field uplink when the phone dies). The
         # key comes from the loot store; NetworkManager is driven as root through
@@ -2749,6 +2765,71 @@ def _loot_nav(crack, control):
     )
 
 
+def _crack_ctl_button(control, value, label, cls=""):
+    qs = _esc((control or {}).get("qs", ""))
+    klass = (' class="%s"' % cls) if cls else ""
+    return ('<form class="inline" method="post" action="/loot' + qs + '">'
+            + _csrf_field(control)
+            + '<input type="hidden" name="action" value="crack-control">'
+            + '<input type="hidden" name="ctl" value="' + value + '">'
+            + '<button type="submit"' + klass + ">" + _esc(label) + "</button></form>")
+
+
+def _crack_control_strip(crack, control):
+    """Worker state + pause/resume + the pending queue, shown atop the Loot page
+    so the cracker can be steered (not just watched). Reads the worker's status
+    (``paused``, ``queue_jobs``, ``current``); writes go through the pi-owned
+    crack dir via /loot, like the queue itself."""
+    st = (crack or {}).get("status") or {}
+    enabled = bool(crack.get("enabled", st.get("enabled", True)))
+    paused = bool(st.get("paused"))
+    state = st.get("state") or ""
+    cur = st.get("current") or {}
+    jobs = st.get("queue_jobs") or []
+    ready = bool(control and control.get("ready"))
+
+    if not enabled:
+        worker = "off — quick-crack disabled"
+    elif paused:
+        worker = "paused"
+    elif state == "cracking":
+        worker = "cracking"
+    elif state == "paused-thermal":
+        worker = "paused (too hot)"
+    else:
+        worker = "idle"
+
+    cur_html = ""
+    if cur and not paused:
+        tgt = cur.get("essid") or cur.get("bssid") or "a network"
+        wl = cur.get("wordlist") or ""
+        cur_html = ('<p class="count">Now cracking <strong>' + _esc(tgt)
+                    + "</strong>" + ((" · " + _esc(wl)) if wl else "") + "</p>")
+
+    def _how(j):
+        return (("mask " + j["mask"]) if j.get("mask")
+                else (j.get("wordlist") or "all lists"))
+    if jobs:
+        items = "".join("<li>" + _esc(j.get("label") or "manual") + " — "
+                        + _esc(_how(j)) + "</li>" for j in jobs[:25])
+        queue_html = ('<p class="count">Queue — %d job(s):</p><ul>' % len(jobs)
+                      + items + "</ul>")
+    else:
+        queue_html = '<p class="smeta">Queue is empty.</p>'
+
+    controls = ""
+    if ready and enabled:
+        btns = [_crack_ctl_button(control, "resume", "Resume") if paused
+                else _crack_ctl_button(control, "pause", "Pause")]
+        if jobs:
+            btns.append(_crack_ctl_button(control, "clear-queue",
+                                          "Clear queue", "danger"))
+        controls = '<div class="power">' + "".join(btns) + "</div>"
+
+    return ('<div class="wladd"><p class="pwrlabel">Crack worker: '
+            + _esc(worker) + "</p>" + cur_html + queue_html + controls + "</div>")
+
+
 def _connect_state(essid, visible, connected):
     """The loot connect control's state for a cracked AP: ``connected`` (the
     station Wi-Fi is on it now), ``connectable`` (its ESSID is in range), or
@@ -2898,9 +2979,11 @@ def _render_loot(daemon, control=None, message=None, error=False):
     guide = _loot_guide()
     gpu = _loot_gpu_section(control)
     back = '<p><a href="' + _esc(_url("/", control)) + '">&larr; Dashboard</a></p>'
+    control_strip = _crack_control_strip(crack, control)
     return _page(
         "Loot - Kestrel",
-        back + "<h1>Loot</h1>" + banner + readout + table + form + gpu + guide,
+        back + "<h1>Loot</h1>" + banner + readout + control_strip
+        + table + form + gpu + guide,
     )
 
 

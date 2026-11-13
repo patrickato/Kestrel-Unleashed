@@ -3082,3 +3082,22 @@ def test_loot_disconnect_when_connected(monkeypatch, tmp_path):
                 data={"csrf": _csrf(page), "disconnect": "AA:BB:CC:DD:EE:01"},
                 follow_redirects=False)
     assert {"target": "wifi-disconnect", "ssid": "HomeNet"} in sent
+
+
+# -- crack control strip on the Loot page -----------------------------------
+def test_crack_control_strip_shows_state_queue_and_controls():
+    crack = {"enabled": True, "status": {
+        "paused": False, "state": "cracking",
+        "current": {"essid": "HomeWiFi", "wordlist": "rockyou.txt"},
+        "queue_jobs": [{"label": "cameras", "wordlist": "camera.txt"}]}}
+    html = web._crack_control_strip(crack, _ctl())
+    assert "cracking" in html and "HomeWiFi" in html and "rockyou.txt" in html
+    assert "cameras" in html and "Queue" in html
+    assert "Pause" in html and "Clear queue" in html      # web auth on -> controls
+    # a paused worker offers Resume instead of Pause
+    crack["status"]["paused"] = True
+    assert "Resume" in web._crack_control_strip(crack, _ctl())
+    # read-only (no auth) -> no buttons
+    off = {"ready": False, "csrf": "t", "qs": "", "enabled": {}}
+    assert "Pause" not in web._crack_control_strip(crack, off)
+    assert "Resume" not in web._crack_control_strip(crack, off)

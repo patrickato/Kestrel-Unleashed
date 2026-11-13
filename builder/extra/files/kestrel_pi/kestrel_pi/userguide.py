@@ -310,8 +310,20 @@ kestrel crack list                   # the loot: recovered passwords, in clearte
 kestrel crack show HomeWiFi          # everything known about one network
 kestrel crack wordlists              # the wordlists on the device, in the order tried
 kestrel crack run HomeWiFi.hc22000 --wordlist rockyou.txt   # re-run one capture against a bigger list
+kestrel crack queue                  # what manual jobs are lined up
+kestrel crack pause                  # soft-pause the worker (finishes the current job, then holds)
+kestrel crack resume                 # resume after a pause
+kestrel crack clear-queue            # drop all pending queued jobs
 sudo kestrel crack disable           # turn auto-cracking off (and enable to turn back on)
 ```
+
+**Steering the worker from the Loot page.** The Loot page shows the worker's
+state (cracking / idle / **paused**), what it's cracking now, and the pending
+**queue**, with **Pause**/**Resume** and **Clear queue** buttons (login on).
+Pause is a soft hold — the current job finishes, then the worker idles until you
+resume — distinct from `disable`, which is the hard off. An AP that has been
+tried against every wordlist is marked **exhausted** and is not re-cracked (even
+after a reboot); those are the ones worth sending to the GPU kit.
 
 Once a network yields a crackable handshake, capturing leaves it alone (one is enough — the password is the whole network's), and the cracker keeps that handshake until it cracks or every wordlist is exhausted. Add a new, bigger wordlist later and it automatically gets a fresh pass at everything still uncracked.
 
@@ -851,7 +863,9 @@ This is the same mechanism as the first-boot Wi-Fi staging, and it works at any 
 | `kestrel crack suggest <ESSID\|BSSID>` | Suggest the best attacks for that network's device type (camera, ISP router, Wi-Fi Direct printer, …) with ready `crack run` lines. |
 | `kestrel crack wordlists` | List the wordlists on the device, in the order tried. |
 | `kestrel crack run FILE... [--wordlist NAME\|all \| --mask '?d?d?d?d?d?d?d?d'] [--rules NAME]` | Queue a manual crack (wordlist or brute-force mask) of one or more capture files. |
-| `kestrel crack enable` / `disable` | Turn on-device cracking on or off. |
+| `kestrel crack enable` / `disable` | Turn on-device cracking on or off (hard). |
+| `kestrel crack pause` / `resume` | Soft-pause the worker (current job finishes) / resume. |
+| `kestrel crack queue` / `clear-queue` | Show the pending job queue / drop all pending jobs. |
 | `kestrel crack clear --yes` | Clear the loot store (captures and wordlists untouched). |
 
 ### WPS attacks

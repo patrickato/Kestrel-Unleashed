@@ -79,6 +79,21 @@ def _default_runner(cmd, timeout=None):
         return 127, "", "command not found"
 
 
+def _job_summary(job):
+    """A compact view of a queued manual job for the status/queue display:
+    its label, how it cracks (wordlist name or mask), and how many files."""
+    import os as _os
+    wl = job.get("wordlist") or ""
+    return {
+        "label": job.get("label") or job.get("origin") or "manual",
+        "wordlist": _os.path.basename(wl) if wl else "",
+        "mask": job.get("mask") or "",
+        "rules": [_os.path.basename(r) for r in (job.get("rules") or [])],
+        "files": len(job.get("files") or []),
+        "created": job.get("created", 0),
+    }
+
+
 def targets_from_events(events):
     """Group parsed :class:`HandshakeEvent`s into per-AP crack targets, keyed by
     BSSID. Returns ``[{bssid, essid, type, hashline, hashlines, lines, files}]``;
@@ -783,6 +798,9 @@ class CrackWorker:
             "masks": len(masks or []),
             "deferred_offload": len(getattr(self, "_deferred_masks", [])),
             "queue": store_mod.queue_len(self.crack_dir),
+            "queue_jobs": [_job_summary(job)
+                           for _p, job in store_mod.list_jobs(self.crack_dir)],
+            "paused": bool(store_mod.read_control(self.crack_dir).get("paused")),
             "temp_c": self._temp(),
             "current": current,
             "last_crack": last,
@@ -797,6 +815,19 @@ class CrackWorker:
         paused = False
         while stop is None or not stop():
             conf = self.config()
+            # Operator pause: a soft hold (separate from the [crack] enabled
+            # config off). The current job finishes, then the worker idles here
+            # until resumed, so the queue and loot are untouched.
+            if store_mod.read_control(self.crack_dir).get("paused"):
+                masks = [str(m).strip() for m in (conf.get("masks") or [])
+                         if str(m).strip()]
+                self._write_status(
+                    self.loot.load(), conf,
+                    wl_mod.discover(conf.get("wordlists_dir"),
+                                    conf.get("order", "size")),
+                    masks, "paused", None)
+                time.sleep(IDLE_SLEEP)
+                continue
             if conf.get("enabled", True) and ac.have_aircrack():
                 if not self.thermal_ok(conf, resuming=paused):
                     paused = True
