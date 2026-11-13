@@ -553,7 +553,7 @@ Draws the classic animated "tamagotchi" face on a Waveshare 2.7" e-Paper HAT, so
 - Option `variant` (default `auto`): panel driver, `auto` (probe), `v2`, or `v1` — the 2.7" HAT ships in two hardware revisions and `auto` detects which.
 - Option `rotation` (default `0`): rotate the image `0`/`90`/`180`/`270` if the HAT is mounted turned.
 - Option `refresh_seconds` (default `30`, floored at `10`): how often the face re-renders; the panel only redraws when the face actually changes, to limit e-ink wear.
-- Options `show_mascot` / `show_brand_glyph` (default `true`): draw the emoticon face / the small corner Kestrel mark.
+- Options `show_mascot` / `show_brand_glyph` (default `true`): draw the emoticon face / the small corner Kestrel mark. With the dashboard login on, the plugin's row also has a one-tap **Hide face** / **Show face** button that flips the mascot on or off live (the status strips and counters stay) without disabling the plugin — handy to go stealthy without losing the readout.
 - Option `battery_low_percent` (default `10`): show the tired face at or below this charge while on battery (needs `ups-hat`).
 - Options `bored_epochs` / `sad_epochs` (defaults `15` / `25`): how many idle event-loop epochs before the face looks bored, then sad.
 - The HAT's four on-board buttons are reserved for now (no action is wired to them).

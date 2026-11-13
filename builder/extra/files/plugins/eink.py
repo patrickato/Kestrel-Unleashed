@@ -335,10 +335,14 @@ class EinkFace(Plugin):
     # All optional: the face degrades to capture/online/idle moods when the
     # agent is off, no UPS HAT is present, or there is no GPS fix.
     __optional_requires__ = ("agent", "battery", "position")
-    # One row button: a read-only mirror of the exact panel frame (a GET, so no
-    # auth/CSRF gate - it shows only the rendered face, no secret).
-    __actions__ = ({"label": "View", "path": "display",
-                    "method": "get", "order": 1},)
+    # Two row buttons: a read-only mirror of the exact panel frame (a GET, so no
+    # auth/CSRF gate - it shows only the rendered face, no secret), and a one-tap
+    # toggle that hides/shows the mascot face (a POST; the label flips live via
+    # webhook_actions).
+    __actions__ = (
+        {"label": "View", "path": "display", "method": "get", "order": 1},
+        {"label": "Hide face", "path": "face", "method": "post", "order": 2},
+    )
     __options__ = {
         "variant": {"type": "str", "default": "auto"},      # auto | v2 | v1
         "rotation": {"type": "int", "default": 0},          # 0/90/180/270
@@ -864,13 +868,42 @@ class EinkFace(Plugin):
             img = img.rotate(rotation, expand=True)
         return img
 
-    # -- web mirror ------------------------------------------------------
+    def webhook_actions(self):
+        """Flip the face button's label to match the current state, so the one
+        tap reads as what it will do (Hide face / Show face)."""
+        on = bool(self.context.options.get("show_mascot", True))
+        out = []
+        for a in self.__actions__:
+            if a.get("path") == "face":
+                a = dict(a, label="Hide face" if on else "Show face")
+            out.append(a)
+        return tuple(out)
+
+    # -- web mirror + the face toggle -----------------------------------
     def on_webhook(self, path, request):
         if path == "display.png":
             return self._mirror_png(request)
         if path == "display":
             return self._mirror_page()
+        if path == "face":
+            return self._toggle_face()
         return self.context.redirect("No such view.", error=True)
+
+    def _toggle_face(self):
+        """Hide or show the mascot without disabling the plugin. The flip takes
+        effect on the next frame (in-memory), and is persisted best-effort so it
+        survives a restart; the live flip stands even if the persist is refused
+        (e.g. web auth off)."""
+        new = not bool(self.context.options.get("show_mascot", True))
+        self.context.options["show_mascot"] = new          # live, next render
+        try:
+            self.context.apply({"plugin": "eink",
+                                 "set": {"show_mascot": "true" if new else "false"}})
+        except Exception:  # noqa: BLE001 - persistence is best-effort
+            pass
+        with self._lock:
+            self._frame_png = None       # force a recompose with the new setting
+        return self.context.redirect("Face shown." if new else "Face hidden.")
 
     def _mirror_png(self, request):
         with self._lock:

@@ -605,3 +605,25 @@ def test_forced_v2_reports_absent_when_busy_never_driven(tmp_path, monkeypatch):
     p._FORCED_TIMEOUT = 0.05
     assert p._ensure_panel() is None
     assert p._absent is True
+
+
+# --- the face on/off quick toggle ------------------------------------------
+def test_face_toggle_hides_and_shows_the_mascot(tmp_path):
+    p = _plugin(tmp_path, {"show_mascot": True})
+    labels = {a["path"]: a["label"] for a in p.webhook_actions()}
+    assert labels["display"] == "View" and labels["face"] == "Hide face"
+
+    p.on_webhook("face", None)                         # hide
+    assert p.context.options["show_mascot"] is False
+    assert {a["path"]: a["label"]
+            for a in p.webhook_actions()}["face"] == "Show face"
+
+    p.on_webhook("face", None)                         # show again
+    assert p.context.options["show_mascot"] is True
+
+
+def test_face_toggle_recomposes_the_mirror(tmp_path):
+    p = _plugin(tmp_path, {"show_mascot": True})
+    p._frame_png = b"stale"
+    p.on_webhook("face", None)
+    assert p._frame_png is None        # invalidated so the mirror recomposes
