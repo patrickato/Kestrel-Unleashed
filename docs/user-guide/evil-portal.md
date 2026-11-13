@@ -98,31 +98,36 @@ dhcp_end   = "10.0.0.250"
 packages, which the in-field app-layer update engine does not install — it ships
 on a freshly flashed image, not an in-place update.
 
-## Troubleshooting: the sign-in sheet never appears
+## How the captive portal is supposed to work
 
-If a phone joins the SSID and gets an IP but no captive "Sign in" sheet pops
-(and nothing is captured), work down this list — the AP and DHCP are usually
-fine; the break is in the captive **probe** reaching the portal:
+A captive portal does **not** pop before connecting. The phone joins the open
+network and gets an IP first (that's "connecting"); *then* it runs a background
+internet check (e.g. `connectivitycheck.gstatic.com/generate_204`). The portal
+answers that probe with a **302 redirect** to the sign-in page, which is what
+makes the phone show **"Sign in to Wi-Fi network."** So the "Connected without
+internet" status is the normal trigger point, not a failure.
 
-1. **Watch the portal's own log.** It now logs every request it serves:
-   `journalctl -u kestrel-evil-portal.service -f`. Join from the phone and watch.
-   - **You see `GET /generate_204 ... (captive probe)` lines** → the portal is
-     reached; if the sheet still doesn't pop, it's the client's captive
-     detection (next point). Open any `http://` site in the phone's browser; it
-     redirects to the portal, and a submit is captured.
-   - **You see nothing** → the probe never reached the portal (DNS/redirect),
-     almost always **Private DNS** (next point).
-2. **Turn off Private DNS on the test phone.** Modern Android/Samsung defaults
-   Private DNS to *Automatic* (DoT to an external resolver), which bypasses the
-   portal's DNS entirely so the captive check never resolves to the portal.
-   Set **Settings → Connections → More connection settings → Private DNS → Off**
-   and rejoin. (This is a client setting, not something the device controls.)
-3. **Prove the server + redirect on the Pi itself**, independent of any phone,
-   while the portal is running:
+The portal serves each request on a fresh connection (`Connection: close`) and
+302-redirects every OS probe to the login page — the two things modern phones
+need. It logs every request: `journalctl -u kestrel-evil-portal.service -f`.
+
+## Troubleshooting: the sign-in window doesn't appear
+
+1. **Watch the portal log** while you join from the phone. Lines like
+   `GET /generate_204 ... -> 302 (captive probe)` mean the probe reached the
+   portal and was redirected — the sign-in should appear.
+2. **If you see nothing in the log**, the probe isn't reaching the portal —
+   almost always **Private DNS** on the phone (modern Android/Samsung defaults
+   it to DoT, which bypasses the portal's DNS). Turn it off: **Settings →
+   Connections → More connection settings → Private DNS → Off**, then rejoin.
+3. **Manual fallback that always works:** open the phone browser to any plain
+   `http://` address — it redirects to the Guest WiFi form. Submit it; the
+   capture shows in `kestrel evil-portal creds`.
+4. **Prove the server + redirect on the Pi itself** while the portal runs:
    ```
-   curl -s -o /dev/null -w 'server %{http_code}\n' http://127.0.0.1:8880/generate_204
-   curl -s -o /dev/null -w 'redirect %{http_code}\n' http://10.0.0.1/generate_204
+   curl -si http://127.0.0.1:8880/generate_204 | head -1
+   curl -si http://10.0.0.1/generate_204 | head -1
    ```
-   Both should print `200`. `server` failing means the portal didn't bind;
-   `redirect` failing (when `server` works) means the `:80 → :8880` iptables
-   REDIRECT isn't in place.
+   Both should print `HTTP/1.0 302 Found`. The first failing means the portal
+   didn't bind; the second failing (when the first works) means the
+   `:80 → :8880` iptables REDIRECT isn't in place.

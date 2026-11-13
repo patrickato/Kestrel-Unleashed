@@ -126,7 +126,7 @@ dnsmasq --keep-in-foreground --conf-file="$run_dir/dnsmasq.conf" & dnsmasq_pid=$
 # The portal HTTP server runs as pi (the creds dir is pi-owned); -I keeps a
 # stray module in the cwd from shadowing the stdlib.
 run_as_pi "$PWN_VENV_PYTHON" -I -m kestrel_pi.evilportal \
-    "$tmpl_dir" "$creds" 0.0.0.0 "$PORTAL_PORT" & portal_pid=$!
+    "$tmpl_dir" "$creds" 0.0.0.0 "$PORTAL_PORT" "$portal_ip" & portal_pid=$!
 
 # Run until any of the three exits (or the unit is stopped); the trap cleans up.
 wait -n "$hostapd_pid" "$dnsmasq_pid" "$portal_pid"

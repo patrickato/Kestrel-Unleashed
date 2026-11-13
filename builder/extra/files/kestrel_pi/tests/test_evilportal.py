@@ -21,11 +21,21 @@ def test_route_get_serves_portal():
     assert r.status == 200 and "Guest Wi-Fi" in r.body and r.recorded is None
 
 
-def test_route_probe_get_still_serves_portal():
-    # a probe GET must get a normal page (that is what pops the sign-in sheet),
-    # never a 204 / redirect-away
-    r = ep.route("GET", "/generate_204", {}, host="connectivitycheck.gstatic.com")
-    assert r.status == 200 and "<form" in r.body
+def test_route_probe_get_redirects_to_portal():
+    # a captive probe must get a 302 redirect to the portal -- that is the
+    # reliable trigger for the "Sign in to Wi-Fi" window (a bare 200 is not).
+    r = ep.route("GET", "/generate_204", {},
+                 host="connectivitycheck.gstatic.com", portal_ip="10.0.0.1")
+    assert r.status == 302 and r.location == "http://10.0.0.1/"
+    assert "10.0.0.1" in r.body            # meta-refresh fallback body
+    # any non-portal path redirects too; a relative target when no IP is known
+    assert ep.route("GET", "/favicon.ico", {}).location == "/"
+
+
+def test_route_portal_paths_serve_the_page():
+    for p in ("/", "/portal", "/index.html", "/login"):
+        r = ep.route("GET", p, {})
+        assert r.status == 200 and "<form" in r.body
 
 
 def test_route_post_records_and_shows_done():
