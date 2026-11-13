@@ -1,6 +1,6 @@
 # Cutting a release
 
-A release is a whole SD-card image, published as a Forgejo release with the
+A release is a whole SD-card image, published as a GitHub release with the
 artifacts and a small `update-manifest.json` that tells the `updates` plugin
 whether a device can take the release **in place** (app-layer) or must be
 reflashed. This note is the maintainer reference for running a release and, in
@@ -12,7 +12,7 @@ The consumer side — how a device discovers and applies an in-place update — 
 ## Running the Release workflow
 
 Releases are built by the **Release** workflow
-(`.forgejo/workflows/main.yml`), triggered manually (`workflow_dispatch`) with
+(`.github/workflows/release.yml`), triggered manually (`workflow_dispatch`) with
 two inputs:
 
 | input | required | default | meaning |
@@ -22,13 +22,13 @@ two inputs:
 
 The workflow sets `_version.py` from `release_version`, builds the image with
 `sudo make image` (Packer + Ansible + PiShrink + `7z`), computes the manifest,
-generates grouped release notes (see below), and publishes a Forgejo release
-through the Forgejo API, tagging the built commit with the `.7z`, its `.sha256`, and
+generates grouped release notes (see below), and publishes a GitHub release
+through the GitHub API, tagging the built commit with the `.7z`, its `.sha256`, and
 `update-manifest.json`.
 
 ## The build host (`image-builder` runner)
 
-The Release job runs on a self-hosted [Forgejo Runner](https://forgejo.org/docs/latest/admin/actions/runner-installation/)
+The Release job runs on a self-hosted [GitHub Actions runner](https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/about-self-hosted-runners)
 registered in **host mode** with the `image-builder` label (for example
 `--labels image-builder:host`). A container job can't build the image, so the
 host itself must provide:
@@ -46,8 +46,8 @@ Go is not a host requirement: the job downloads a pinned, SHA-256-verified Go
 from go.dev into `~/.cache/kestrel-go/` (x86_64 or aarch64 hosts). The job
 deletes the built image and archive at the end, so they don't pile up.
 
-Release creation uses the `RELEASE_TOKEN` secret if it is set (a Forgejo access
-token with repository write scope), otherwise the job's own token. Forgejo's
+Release creation uses the `RELEASE_TOKEN` secret if it is set (a GitHub token
+with `contents: write` scope), otherwise the job's own `GITHUB_TOKEN`. GitHub's
 attachment size limit (and any reverse-proxy upload limit) must allow the
 `.7z`.
 
@@ -70,8 +70,8 @@ A beta is a release whose version is `X.Y.Z-beta.N` (`N` counting from 1, with
 the dot, so `beta.10` sorts after `beta.2`). The workflow derives everything
 else from that suffix, so the tag and the release type can't disagree:
 
-- the release is published as a Forgejo **pre-release**, so the `updates`
-  plugin offers it only to devices with its `beta` option on, and Forgejo's
+- the release is published as a GitHub **pre-release**, so the `updates`
+  plugin offers it only to devices with its `beta` option on, and GitHub's
   "latest release" keeps pointing at the newest stable one;
 - versions order by SemVer precedence: `1.3.0-beta.1` < `1.3.0-beta.2` <
   `1.3.0`, so a beta device moves on to the final release when it is cut;
@@ -110,7 +110,7 @@ reflash for a device on `1.2.x`.
 ## Release notes
 
 The release body is generated automatically by
-`.forgejo/gen-release-notes.py` (run from the **Generate release notes** step)
+`.github/gen-release-notes.py` (run from the **Generate release notes** step)
 rather than being a bare "Built from `<sha>`". The generator:
 
 - collects the commits **unique to this release** — reachable from the built
@@ -131,7 +131,7 @@ afterwards to add a headline or regroup. If generation ever fails, the step
 falls back to a provenance-only note so a notes problem never blocks a release.
 
 Older releases (0.0.1–0.6.0) were back-filled with the same grouped format;
-regenerate or edit any release body in the Forgejo web UI (or with
+regenerate or edit any release body in the GitHub web UI (or with
 `PATCH /api/v1/repos/{owner}/{repo}/releases/{id}`).
 
 ## Publishing the `kestrel-pi` package to PyPI
@@ -169,7 +169,7 @@ from in-repo source regardless; PyPI only serves an external
 
 `auto` (the default) marks the release **reflash** when the diff since the
 previous release touches a build-layer input — `builder/config.json`,
-`builder/config.yml`, `Makefile`, or anything under `.forgejo/workflows/` (or
+`builder/config.yml`, `Makefile`, or anything under `.github/workflows/` (or
 the old `.github/workflows/`) —
 and **app-layer** otherwise. The first-ever release is always reflash.
 

@@ -1,0 +1,29 @@
+name: Lint
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # ansible-core in requirements-lint.txt is a recent release; 3.12 is
+          # what the lint tools are pinned against. (This is the lint host's
+          # Python, not the image's 3.11 runtime.)
+          python-version: '3.12'
+
+      - name: Install lint tools
+        run: python -m pip install -r requirements-lint.txt
+
+      # shellcheck is preinstalled on GitHub-hosted ubuntu runners; make lint
+      # runs ansible-playbook --syntax-check, yamllint and shellcheck.
+      - name: Lint
+        run: make lint

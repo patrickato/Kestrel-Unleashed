@@ -8,7 +8,7 @@ Improvements / Fixes, and prints Markdown notes to stdout. CI tooling only; not
 shipped in the image.
 
 Usage (CI):
-    python3 .forgejo/gen-release-notes.py update-manifest.json > release-notes.md
+    python3 .github/gen-release-notes.py update-manifest.json > release-notes.md
 
 Options (for local testing):
     --ref <rev>            commit/tag to describe (default: HEAD)

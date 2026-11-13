@@ -17,7 +17,7 @@ How to use this file:
 ### Sign releases and verify the signature before installing
 
 - **What:** release authenticity today rests only on TLS to the configured host
-  and the Forgejo account (or `RELEASE_TOKEN`) that publishes releases. Whoever
+  and the GitHub account (or `RELEASE_TOKEN`) that publishes releases. Whoever
   controls either can publish a release that runs as root on every device whose
   operator taps Upgrade.
 - **Why deferred:** needs a signing key kept off the build host, a key-rotation
@@ -128,7 +128,7 @@ How to use this file:
   comparison) runs only on a desktop.
 - **Why deferred:** the Test workflow installs only what `make test` needs; this
   adds markdown-it-py (the browser isn't needed for these tests).
-- **What to do:** add a step to `.forgejo/workflows/test.yml` that installs
+- **What to do:** add a step to `.github/workflows/test.yml` that installs
   `markdown-it-py` and `Pillow` and runs the tool's tests.
 - **Trigger:** the tool's renderer starts changing often.
 

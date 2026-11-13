@@ -311,16 +311,16 @@ Operator-added plugins drop a `.py` into `/etc/kestrel/plugins/` (which override
 
 ## Building
 
-### With Forgejo Actions (recommended)
+### With GitHub Actions (recommended)
 
-Run the **Release** workflow (Actions, then Release, then *Run workflow*). It runs on a self-hosted Forgejo runner with the `image-builder` label; see [Cutting a release](docs/developer/releasing.md) for that host's requirements.
+Run the **Release** workflow (Actions, then Release, then *Run workflow*). It runs on a self-hosted GitHub Actions runner with the `image-builder` label; see [Cutting a release](docs/developer/releasing.md) for that host's requirements.
 
 | Input | Purpose |
 | --- | --- |
 | `release_version` | Version written to `_version.py`: `X.Y.Z`, or `X.Y.Z-beta.N` for a beta (published as a pre-release). Also the release tag and part of the asset names. |
 | `update_kind` | `auto` (default), `app-layer` or `reflash`: whether devices can take the release in place. |
 
-The workflow builds the image and publishes a Forgejo release tagged at the built commit, with `kestrel-<version>.7z` and `kestrel-<version>.7z.sha256` attached. The image's own `.sha256` is inside the archive.
+The workflow builds the image and publishes a GitHub release tagged at the built commit, with `kestrel-<version>.7z` and `kestrel-<version>.7z.sha256` attached. The image's own `.sha256` is inside the archive.
 
 ### Locally
 
@@ -364,7 +364,7 @@ pip install -r requirements-lint.txt
 make lint
 ```
 
-The same checks run in the **Lint** Forgejo Actions workflow on every push and pull request, and `make test` runs in the **Test** workflow.
+The same checks run in the **Lint** GitHub Actions workflow on every push and pull request, and `make test` runs in the **Test** workflow.
 
 ## Repository layout
 
@@ -390,8 +390,8 @@ The same checks run in the **Lint** Forgejo Actions workflow on every push and p
 │       │   ├── systemd/      # kestrel systemd units
 │       │   └── scripts/      # operator helper scripts (installed read-only)
 │       └── deployments/      # empty; add files to copy into the image
-├── .forgejo/
-│   ├── workflows/            # Release, Lint and Test CI (Forgejo Actions)
+├── .github/
+│   ├── workflows/            # Release, Lint and Test CI (GitHub Actions)
 │   └── gen-release-notes.py  # release-notes helper
 ├── CLAUDE.md                 # guidance for Claude Code
 └── .claude/                  # Claude Code project settings and session hook

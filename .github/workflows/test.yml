@@ -1,0 +1,30 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # Matches the image's runtime Python (ansible-core 2.14-era bookworm),
+          # so no 3.12+ syntax slips through the suite.
+          python-version: '3.11'
+
+      - name: Install test dependencies
+        # The kestrel_pi suite needs flask/requests (web + plugins), numpy (the
+        # agent spec imports it at module load) and pillow (the e-ink renderer).
+        # torch/SB3 are lazy-imported and stubbed in the tests, so the heavy
+        # agent stack is deliberately not installed here.
+        run: python -m pip install pytest flask requests numpy pillow
+
+      - name: Test
+        run: make test

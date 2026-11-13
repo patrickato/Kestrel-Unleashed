@@ -35,7 +35,7 @@ worth it when you are changing the agent env/policies.
 
 Two workflows run on every push/PR: **Lint** (`make lint` — `ansible-playbook
 --syntax-check`, `yamllint`, `shellcheck`, and a `py_compile` byte-compile of the
-package) and **Test** (`.forgejo/workflows/test.yml`, which runs `make test` —
+package) and **Test** (`.github/workflows/test.yml`, which runs `make test` —
 the `pytest` suite). A green PR means both passed. Still run `make test` yourself
 while iterating under `builder/extra/files/kestrel_pi/` so you catch failures
 before the push.

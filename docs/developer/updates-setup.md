@@ -45,7 +45,7 @@ between.)
 ## Stable and beta releases
 
 Releases come in two channels, told apart by the tag: a stable release is
-`X.Y.Z`, a beta is `X.Y.Z-beta.N` and is published as a Forgejo pre-release
+`X.Y.Z`, a beta is `X.Y.Z-beta.N` and is published as a GitHub pre-release
 (see [Cutting a release](releasing.md#beta-releases)). By default the plugin
 only offers stable releases. Turn on the `beta` option (a checkbox on the
 plugin's settings page, or `sudo kestrel plugins enable updates --set
@@ -73,7 +73,7 @@ Checking for releases is a network action, so enabling `updates` takes the same
 authorized-use acknowledgment as the other networked plugins (if you have
 already enabled capture, it is silent — the acknowledgment is remembered
 device-wide). Nothing is transmitted off the device; it only makes a read-only
-request to the Forgejo releases API on `host` (`/api/v1/repos/<repo>/releases`).
+request to the GitHub releases API on `host` (`/repos/<repo>/releases`).
 
 While enabled it checks at most every `check_interval_seconds` (default 6h)
 whenever a management path is online, and once at load. The result shows up as
@@ -124,10 +124,10 @@ minute, while online); the result then shows on the **Updates** card and in
 The default repo is public, so the plugin reads its releases with no
 credentials. If you run kestrel from a **private** repo or a **private
 fork** — e.g. to keep your own changes or deployment payload off the public
-internet — Forgejo hides that repo from anonymous requests (the check just sees
+internet — GitHub hides that repo from anonymous requests (the check just sees
 "no public release"), so the plugin has to authenticate.
 
-**Why a token.** A Forgejo access token lets the device prove it may read your
+**Why a token.** A GitHub personal-access token lets the device prove it may read your
 private repo. It authenticates all three steps that touch the server: the
 periodic release check, the download of each release's update manifest, and the
 `git clone` the in-place update performs. Without it, none of them can reach a
@@ -142,7 +142,7 @@ reach your own private repo. The token is only ever sent to `host`, and only
 over `https://`. Scope it as narrowly as possible so a leak off the device is
 low-impact.
 
-**Make a token** in Forgejo under **Settings → Applications → Generate New
+**Make a token** on GitHub under **Settings → Developer settings → Generate New
 Token**, as read-only as it will go: only **repository: Read**.
 
 **Set it on the device** (also set `repo`, and `host`, if your fork's
@@ -150,7 +150,7 @@ owner/name or server differs):
 
 ```bash
 sudo kestrel plugins enable updates --set repo=you/your-repo --set token=xxx
-sudo kestrel plugins enable updates --set host=https://forgejo.example.org
+sudo kestrel plugins enable updates --set host=https://ghe.example.org/api/v3
 ```
 
 The token is written to `config.toml` and masked everywhere afterwards. To
@@ -303,7 +303,7 @@ must be ones only root controls:
 - The token is sent only to `host`, over https. The clone gets it through
   git's `GIT_CONFIG_*` environment, so it never appears in a process command
   line other local users can read.
-- Release authenticity rests on TLS to `host` and the Forgejo account that
+- Release authenticity rests on TLS to `host` and the GitHub account that
   publishes releases; releases are not yet signed (tracked in
   [Deferred improvements](deferred.md)).
 
@@ -384,9 +384,9 @@ All keys live under `[plugins.updates]` in `/etc/kestrel/config.toml`.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `false` | Opt-in; off = no checks and no upgrade button. |
-| `repo` | `aluminum-ice/kestrel` | Forgejo `owner/repo` to check (override for a fork). |
-| `host` | `https://git.3ntropy.io` | The Forgejo (or Gitea) server hosting `repo`. Must be `https://`; the check is skipped otherwise. |
-| `token` | `""` | Optional Forgejo access token for a **private** repo/fork (masked secret, device-only). Empty = unauthenticated, public releases only. See [Updating from a private repo](#updating-from-a-private-repo). |
+| `repo` | `patrickato/Kestrel-Unleashed` | GitHub `owner/repo` to check (override for a fork). |
+| `host` | `https://api.github.com` | The GitHub API base. Must be `https://`; the check is skipped otherwise. Set a GitHub Enterprise API base (e.g. `https://ghe.example.org/api/v3`) only if you host there. |
+| `token` | `""` | Optional GitHub personal-access token for a **private** repo/fork (masked secret, device-only). Empty = unauthenticated, public releases only. See [Updating from a private repo](#updating-from-a-private-repo). |
 | `check_interval_seconds` | `21600` | At most this often, re-check while online. |
 | `timeout` | `30` | Per-request network timeout. |
 | `beta` | `false` | Also offer beta (`X.Y.Z-beta.N`) releases. See [Stable and beta releases](#stable-and-beta-releases). |

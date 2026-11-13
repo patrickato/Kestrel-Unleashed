@@ -434,7 +434,7 @@
   # Install screenrc configuration
   # DISABLED: the aluminum-ice/screenrc repo is no longer on GitHub (the clone
   # 404s and fails the build). Kept commented out, not removed, so it can be
-  # re-enabled once the repo is available again (e.g. on the Forgejo instance):
+  # re-enabled once the repo is available again (e.g. on the GitHub repo):
   # point `repo` at the new location and uncomment the three tasks below.
   # - name: clone screenrc repository
   #   git:

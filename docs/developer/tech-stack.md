@@ -202,13 +202,13 @@ algorithms stay swappable. Offline training has its own entry point
 
 ## CI/CD
 
-Forgejo Actions, in `.forgejo/workflows/`:
+GitHub Actions, in `.github/workflows/`:
 
 | Workflow | Trigger | What it does |
 | --- | --- | --- |
 | **Lint** (`lint.yml`) | every push and pull request | `make lint` with the pinned lint tools. Should always be green. |
 | **Test** (`test.yml`) | every push and pull request | `make test`, the `kestrel_pi` pytest suite. |
-| **Release** (`main.yml`) | manual (`workflow_dispatch`) | Sets `_version.py`, runs `sudo make image` on the self-hosted `image-builder` runner, publishes a Forgejo release with the artifacts and an `update-manifest.json`. See [Cutting a release](releasing.md). |
+| **Release** (`release.yml`) | manual (`workflow_dispatch`) | Sets `_version.py`, runs `sudo make image` on the self-hosted `image-builder` runner, publishes a GitHub release with the artifacts and an `update-manifest.json`. See [Cutting a release](releasing.md). |
 
 
 Framework unit tests (`make test`) run the venv's `pytest` in the
