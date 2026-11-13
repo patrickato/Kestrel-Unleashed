@@ -553,3 +553,39 @@ auto = true                 # offload new uncracked targets on their own; false 
 interval_seconds = 900      # at most this often check for new targets / finished runs; also on reconnect and the button
 stale_lock_hours = 12       # a running lock older than this is treated as a crashed run
 timeout = 600               # abort a single SSH/rsync operation after this many seconds
+
+[plugins.auto-whitelist]
+enabled = false             # stop attacking an AP once its handshake is confirmed, opt-in
+# When Kestrel has verified, crackable material for an AP -- a true 4-way the AP
+# itself completed (an M2+M3 / M3+M4 message pair), or a clientless PMKID -- it
+# adds that AP to the capture whitelist, so AngryOxide stops deauthing it on the
+# next capture (re)start. A partial, client-side M1+M2 is left alone, so the
+# device keeps trying for a real handshake. Local-only: it only reduces
+# attacking, transmits nothing, and needs no authorized-use acknowledgment.
+count_pmkid = true          # treat a clientless PMKID as confirmed; false = whitelist only on a 4-way
+require_ap_confirmed = true # require an AP-confirmed 4-way (M2+M3 / M3+M4); false = accept any captured 4-way
+
+[plugins.wardrive]
+enabled = false             # wardrive scoreboard: the run's numbers, opt-in
+# The map's companion: where the map shows where, this sums the run into a
+# dashboard card and a Scoreboard page -- networks and access points, how many
+# got a GPS location, the capture-quality breakdown (PMKID / 4-way / both), how
+# many are cracked, and the route distance. Reads the capture store, the GPS
+# sidecars and the loot store only; transmits nothing (no authorized-use ack).
+# No options -- it reflects whatever capture, gps and the cracker have produced.
+
+[plugins.onlinehashcrack]
+enabled = false             # offload handshakes to onlinehashcrack.com, opt-in
+# A second, independent offload path alongside wpa-sec and the GPU offload: it
+# submits uncracked hc22000 handshakes to onlinehashcrack.com and tracks which
+# networks it cracked. NOTE: the service never returns the key itself -- a
+# cracked task reports FOUND and a link to view the key on the site, so this
+# plugin does NOT auto-fill the on-device loot (use wpa-sec or the GPU offload
+# for keys that land back in loot). api_key is supplied by the operator at enable
+# time, never baked in. It ships captured material off-device, so enabling it
+# takes the authorized-use acknowledgment.
+endpoint = "https://api.onlinehashcrack.com/v2"
+algo_mode = 22000           # hashcat WPA mode (WPA-PBKDF2-PMKID+EAPOL); change only if the service asks
+poll_results = true         # poll the task list for cracked networks; false = submit only
+results_interval_seconds = 3600   # at most this often, re-poll while online
+timeout = 30                # per-request HTTP timeout (seconds)
