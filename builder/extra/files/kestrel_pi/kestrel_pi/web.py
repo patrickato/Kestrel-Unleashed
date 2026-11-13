@@ -42,6 +42,7 @@ from . import config_catalog
 from . import evilportal
 from .applyclient import APPLY_SOCKET, apply_change
 from .connectivity import MANAGEMENT_INTERFACES
+from . import device_id
 from .crack import CRACK_DEFAULTS, CRACK_DIR
 from .crack import store as crack_store
 from .crack import suggest as crack_suggest
@@ -3917,9 +3918,39 @@ def _render_whitelist(entries, control=None, query="", page=1,
     ready = bool(control and control.get("ready"))
     qs = _esc((control or {}).get("qs", "")) if control else ""
 
+    # Enrich each whitelisted AP with what we already know about it: its network
+    # name and what kind of device it is. The loot store already carries the
+    # ESSID and a device label/category/product (set from the name + OUI via
+    # device_id), so a BSSID-only entry still shows "what it is".
+    try:
+        loot = crack_store.LootStore(CRACK_DIR).load()
+    except Exception:  # noqa: BLE001 - a missing/corrupt store just means no extra info
+        loot = {}
+
+    def _describe(entry):
+        is_mac = _is_mac(entry)
+        rec = loot.get(entry.upper()) if is_mac else None
+        essid = (rec.get("essid") if rec else "") or ("" if is_mac else entry)
+        what = ""
+        if rec and rec.get("device"):
+            what = rec["device"]
+        else:
+            ident = device_id.identify(bssid=entry if is_mac else "", essid=essid)
+            what = next((ident.get(k) for k in ("product", "category")
+                         if ident.get(k) and ident[k] != "unknown"), "")
+        status = ""
+        if rec:
+            status = "cracked" if rec.get("password") else (rec.get("status") or "")
+        return essid, what, status
+
+    def _cell(label, value):
+        return ('<td data-label="' + label + '">'
+                + (_esc(value) if value else '<span class="smeta">—</span>') + "</td>")
+
     rows = []
     for entry in window:
         kind = "BSSID" if _is_mac(entry) else "ESSID"
+        essid, what, status = _describe(entry)
         remove = ""
         if ready:
             remove = (
@@ -3930,10 +3961,11 @@ def _render_whitelist(entries, control=None, query="", page=1,
                 + '<button type="submit" class="danger">Remove</button></form>')
         rows.append(
             '<tr><td data-label="ap">' + _esc(entry) + "</td>"
-            '<td data-label="type">' + kind + "</td>"
+            + _cell("network", essid) + _cell("what", what) + _cell("status", status)
+            + '<td data-label="type">' + kind + "</td>"
             '<td data-label="">' + remove + "</td></tr>")
     body_rows = "".join(rows) or (
-        "<tr><td colspan='3'>" + ("no entries match that search" if needle
+        "<tr><td colspan='6'>" + ("no entries match that search" if needle
                                   else "nothing whitelisted yet") + "</td></tr>")
 
     token = (control or {}).get("token") or ""
@@ -3999,7 +4031,8 @@ def _render_whitelist(entries, control=None, query="", page=1,
         "whitelist - Kestrel",
         back + "<h1>Whitelist</h1>" + banner + note + add_form + search
         + '<p class="count">' + count + "</p>"
-        + "<div class='wrap'><table><thead><tr><th>ap</th><th>type</th><th></th>"
+        + "<div class='wrap'><table><thead><tr><th>ap</th><th>network</th>"
+        "<th>what</th><th>status</th><th>type</th><th></th>"
         "</tr></thead><tbody>" + body_rows + "</tbody></table></div>" + pager,
     )
 

@@ -574,6 +574,15 @@ def test_whitelist_page_search_filters_entries():
     assert "CoffeeShop" in html and "HomeWiFi" not in html
 
 
+def test_whitelist_rows_describe_what_each_ap_is():
+    # The whitelist no longer shows only a bare BSSID/name -- it says what the
+    # device is, derived from the network name (and the loot store when present).
+    html = web._render_whitelist(["NETGEAR12", "ARLO_VMB_1672948336"], _ctl())
+    assert "NETGEAR router" in html        # name -> device kind
+    assert "Arlo camera" in html
+    assert "<th>network</th>" in html and "<th>what</th>" in html
+
+
 # -- _render_plugins: the plugins page -----------------------------------
 def test_plugins_page_renders_loaded_and_disabled_plugins():
     html = web._render_plugins(_status([
