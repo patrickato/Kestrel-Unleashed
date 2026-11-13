@@ -1,0 +1,21 @@
+# Kestrel update trust anchor -- ssh-keygen allowed_signers format.
+#
+# This file lists the public key(s) that may sign in-place (app-layer) update
+# manifests. While it contains no key line (only blanks and these comments),
+# release signing is OFF and updates install exactly as before -- unsigned.
+#
+# To REQUIRE signed updates, add one line per trusted signer, in the
+# ssh-keygen allowed_signers format:
+#
+#     <principal> <keytype> <base64-public-key>
+#
+# e.g.  kestrel-release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+#
+# The matching PRIVATE key is held only as the Release workflow's
+# UPDATE_SIGNING_KEY secret and is NEVER committed. Once a key line is present,
+# every offered release must ship a valid update-manifest.json.sig over this
+# key or the device refuses it (a refusal that --force cannot override).
+#
+# The trust anchor is pinned at flash time: the in-place update engine does not
+# rewrite this file, so changing or rotating the trusted key is a reflash. See
+# docs/developer/updates-setup.md ("Signing releases").

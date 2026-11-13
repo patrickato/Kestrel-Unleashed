@@ -210,6 +210,31 @@ jobs:
                   best = (k, rel["tag_name"])
           print(best[1] if best else "")
 
+    # Sign the update manifest when a signing key is configured. Devices with a
+    # trust anchor baked in (/etc/kestrel/update-signers) require this signature
+    # before an in-place update; with no UPDATE_SIGNING_KEY secret the step is a
+    # no-op and the release ships unsigned (the default, and what every current
+    # device expects). The private key is written to a mode-0600 temp file,
+    # never echoed, and removed on exit. See docs/developer/updates-setup.md.
+    - name: Sign the update manifest
+      run: |
+        set -eu
+        if [ -z "${UPDATE_SIGNING_KEY:-}" ]; then
+          echo "no UPDATE_SIGNING_KEY secret set; shipping an unsigned release"
+          exit 0
+        fi
+        umask 077
+        key="$(mktemp)"
+        trap 'rm -f "$key"' EXIT
+        printf '%s\n' "$UPDATE_SIGNING_KEY" > "$key"
+        ssh-keygen -Y sign -f "$key" -n kestrel-update update-manifest.json
+        # Confirm the signature is well-formed (no trust check needed here).
+        ssh-keygen -Y check-novalidate -n kestrel-update \
+          -s update-manifest.json.sig < update-manifest.json
+        echo "signed update-manifest.json -> update-manifest.json.sig"
+      env:
+        UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+
     # Build grouped release notes (New / Improvements / Fixes) from the commits
     # unique to this release, with an install-type line from the manifest.
     # A stable release's notes cover everything since the previous stable
@@ -255,7 +280,11 @@ jobs:
           -H "Content-Type: application/json" --data-binary @release.json \
           "$api/releases" | python3 -c 'import json, sys; print(json.load(sys.stdin)["id"])')
         echo "created release $id"
-        for f in "kestrel-$MY_VERSION.7z" "kestrel-$MY_VERSION.7z.sha256" update-manifest.json; do
+        assets="kestrel-$MY_VERSION.7z kestrel-$MY_VERSION.7z.sha256 update-manifest.json"
+        # The manifest signature is attached only when the signing step produced
+        # one (UPDATE_SIGNING_KEY configured); otherwise the release is unsigned.
+        [ -f update-manifest.json.sig ] && assets="$assets update-manifest.json.sig"
+        for f in $assets; do
           echo "uploading $f"
           ctype=application/octet-stream
           case "$f" in *.json) ctype=application/json ;; esac

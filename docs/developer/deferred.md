@@ -14,23 +14,6 @@ How to use this file:
 
 ## In-place updates (`updates` plugin and update engine)
 
-### Sign releases and verify the signature before installing
-
-- **What:** release authenticity today rests only on TLS to the configured host
-  and the GitHub account (or `RELEASE_TOKEN`) that publishes releases. Whoever
-  controls either can publish a release that runs as root on every device whose
-  operator taps Upgrade.
-- **Why deferred:** needs a signing key kept off the build host, a key-rotation
-  story, and a one-time reflash to ship the public key; the root-side
-  verification that now exists (`update-apply --verify`) was the prerequisite.
-- **What to do:** sign `update-manifest.json` (for example `ssh-keygen -Y sign`
-  or minisign) in the Release workflow, with the private key held outside the
-  runner; ship the public key in the image (root-owned); make `--verify` refuse
-  a release whose manifest signature doesn't check out. Signed tags plus
-  `git verify-tag` are an alternative.
-- **Pick up when:** before the device is used beyond the maintainer's own
-  hardware, or if the release account or runner is shared.
-
 ### Remove systemd units a release drops
 
 - **What:** the engine removes shipped plugins, lib scripts and operator

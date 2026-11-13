@@ -135,11 +135,22 @@ BACKUP_KEY = "/home/pi/.ssh/id_ed25519"
 DEFAULT_REPO = "patrickato/Kestrel-Unleashed"
 DEFAULT_HOST = "https://api.github.com"
 MANIFEST_ASSET = "update-manifest.json"
+MANIFEST_SIG_ASSET = "update-manifest.json.sig"
 RELEASES_PAGE = 50
 RELEASES_MAX_PAGES = 2
 # Response size caps for --verify (a release list carries the release notes).
 MAX_LIST_BYTES = 4 * 1024 * 1024
 MAX_MANIFEST_BYTES = 256 * 1024
+MAX_SIG_BYTES = 16 * 1024
+# Release signing (optional, opt-in by the maintainer): the trusted public key(s)
+# that may sign a release manifest, baked into the image in OpenSSH
+# allowed_signers format. When this file names at least one signer, a release
+# MUST carry a valid update-manifest.json.sig over that key or it is refused;
+# when it is empty/absent, releases are unsigned (TLS + the manifest's pinned
+# commit are the trust anchors, as before). See docs/developer/updates-setup.md.
+SIGNERS_FILE = "/etc/kestrel/update-signers"
+# The ssh-keygen signature namespace; the Release workflow signs with the same.
+SIG_NAMESPACE = "kestrel-update"
 
 # (source under builder/extra/files, destination basename under LIB_DIR, mode).
 # Mirrors "install kestrel library scripts" + capture scripts + the
@@ -995,6 +1006,84 @@ def http_fetch(url, token="", timeout=30, limit=MAX_LIST_BYTES, attempts=3):
     return 599, None
 
 
+def http_fetch_bytes(url, token="", timeout=30, limit=MAX_MANIFEST_BYTES,
+                     attempts=3):
+    """GET ``url`` and return ``(status, raw bytes | None)`` with the same retry
+    and size cap as :func:`http_fetch`. Used for signature verification, which
+    needs the exact bytes that were signed (not a re-serialised JSON)."""
+    headers = {"Accept": "application/octet-stream",
+               "User-Agent": "kestrel-update"}
+    if token:
+        headers["Authorization"] = "Bearer %s" % token
+    delay = 2
+    for attempt in range(attempts):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read(limit + 1)
+                if len(raw) > limit:
+                    raise Refused("the server's reply for %s is too large" % url)
+                return resp.status, raw
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500 or attempt == attempts - 1:
+                return exc.code, None
+        except (urllib.error.URLError, OSError) as exc:
+            if attempt == attempts - 1:
+                raise Refused("could not reach the release server (%s)" % exc)
+        time.sleep(delay)
+        delay *= 2
+    return 599, None
+
+
+def trusted_principals(signers_file=SIGNERS_FILE):
+    """The signer identities (first field) in the allowed_signers file, skipping
+    blank and ``#`` comment lines. Empty list = signing is not configured."""
+    out = []
+    try:
+        with open(signers_file, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                principal = line.split()[0]
+                if principal:
+                    out.append(principal)
+    except OSError:
+        return []
+    return out
+
+
+def verify_manifest_signature(signers_file, manifest_bytes, sig_bytes,
+                              run=None):
+    """True when ``sig_bytes`` is a valid ssh-keygen signature over
+    ``manifest_bytes`` by one of the signers in ``signers_file``. Writes the
+    data + signature to a temp dir and runs ``ssh-keygen -Y verify`` against each
+    trusted principal. ``run`` is injectable for tests."""
+    runner = run or subprocess.run
+    principals = trusted_principals(signers_file)
+    if not principals:
+        return False
+    with tempfile.TemporaryDirectory(prefix="kestrel-sig-") as td:
+        sig = os.path.join(td, "m.sig")
+        try:
+            with open(sig, "wb") as fh:
+                fh.write(sig_bytes)
+        except OSError:
+            return False
+        for principal in principals:
+            try:
+                proc = runner(
+                    ["/usr/bin/ssh-keygen", "-Y", "verify", "-f", signers_file,
+                     "-I", principal, "-n", SIG_NAMESPACE, "-s", sig],
+                    input=manifest_bytes, capture_output=True,
+                    timeout=20, check=False)
+            except (OSError, subprocess.SubprocessError):
+                return False
+            if proc.returncode == 0:
+                return True
+    return False
+
+
 def clone_base(host):
     """The git-clone base for an API ``host``. GitHub serves its API at
     api.github.com but repos are cloned from github.com; GitHub Enterprise serves
@@ -1009,7 +1098,8 @@ def clone_base(host):
 
 def verify_release(tag, explicit=False, force=False, expect="",
                    config_file=CONFIG_FILE, version_file=VERSION_FILE,
-                   fetch=http_fetch):
+                   fetch=http_fetch, fetch_bytes=http_fetch_bytes,
+                   signers_file=SIGNERS_FILE):
     """Decide whether release ``tag`` may be installed in place, asking the
     configured server directly. Returns a dict with ``ok`` and either ``error``
     or the ``tag``/``commit``/``host``/``repo`` to fetch (plus ``warnings``
@@ -1091,6 +1181,33 @@ def verify_release(tag, explicit=False, force=False, expect="",
                 elif ikey is not None and ikey < mkey:
                     refuse("the installed %s predates the oldest version %s can "
                            "update in place (%s)" % (installed, tag, min_from))
+
+        # Release signing (when the maintainer has configured trusted keys): the
+        # manifest must carry a valid signature over one of those keys. A missing
+        # or bad signature means tampering, so it is a hard refuse -- never
+        # overridable by --force (unlike the policy checks above). When no signer
+        # is configured, releases are unsigned as before.
+        if trusted_principals(signers_file):
+            man_url = sig_url = ""
+            for a in rel.get("assets") or []:
+                if not isinstance(a, dict):
+                    continue
+                if a.get("name") == MANIFEST_ASSET:
+                    man_url = _text(a.get("browser_download_url"))
+                elif a.get("name") == MANIFEST_SIG_ASSET:
+                    sig_url = _text(a.get("browser_download_url"))
+            if not man_url or not sig_url:
+                raise Refused("%s is not signed, but this device requires a "
+                              "signed release" % tag)
+            # Public release assets, so no token to the download host.
+            mst, man_bytes = fetch_bytes(man_url, "", timeout, MAX_MANIFEST_BYTES)
+            sst, sig_bytes = fetch_bytes(sig_url, "", timeout, MAX_SIG_BYTES)
+            if mst >= 400 or sst >= 400 or not man_bytes or not sig_bytes:
+                raise Refused("could not fetch %s's manifest signature to "
+                              "verify it" % tag)
+            if not verify_manifest_signature(signers_file, man_bytes, sig_bytes):
+                raise Refused("%s's manifest signature did not verify against "
+                              "the trusted key" % tag)
 
         if tkey is not None and ikey is not None and tkey > ikey:
             reason = _gap_reason(api, get, ikey, tkey, installed, tag)

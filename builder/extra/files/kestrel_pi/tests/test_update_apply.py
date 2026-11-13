@@ -844,3 +844,141 @@ def test_version_key_matches_the_plugin():
                  "1.2.3+b5", "0.7.0-rc.1", "0.7.0-beta", "master", "", None, "0.7",
                  "0.7a.0"):
         assert ua.version_key(text) == plugin.version_key(text), text
+
+
+# -- release signing --------------------------------------------------------
+# These exercise the real ssh-keygen verify path the device uses, so they are
+# skipped where ssh-keygen is absent. The trust anchor ships empty, so an
+# unconfigured device is covered by every test above (no signers_file passed =
+# the default /etc/kestrel/update-signers, which does not exist in the harness).
+import subprocess as _sp  # noqa: E402
+
+_HAVE_SSH_KEYGEN = shutil.which("ssh-keygen") is not None
+_needs_keygen = pytest.mark.skipif(not _HAVE_SSH_KEYGEN,
+                                   reason="ssh-keygen not installed")
+
+_PRINCIPAL = "kestrel-release"
+
+
+def _make_signer(tmp_path):
+    """Generate an ed25519 key and a matching allowed_signers file; return
+    ``(signers_path, sign(bytes) -> sig bytes)``."""
+    key = tmp_path / "sign_key"
+    _sp.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-C", _PRINCIPAL,
+             "-f", str(key)], check=True, capture_output=True)
+    pub = (tmp_path / "sign_key.pub").read_text(encoding="utf-8").split()
+    signers = tmp_path / "update-signers"
+    signers.write_text("# trusted\n%s %s %s\n" % (_PRINCIPAL, pub[0], pub[1]),
+                       encoding="utf-8")
+
+    def sign(data):
+        blob = tmp_path / "to_sign"
+        blob.write_bytes(data)
+        _sp.run(["ssh-keygen", "-Y", "sign", "-f", str(key), "-n",
+                 "kestrel-update", str(blob)], check=True, capture_output=True)
+        return (tmp_path / "to_sign.sig").read_bytes()
+
+    return str(signers), sign
+
+
+def _signed_rel(tag, manifest_host=FORGE):
+    """A release carrying both the manifest and its detached signature asset."""
+    base = "%s/m/%s" % (manifest_host, tag)
+    return {"tag_name": tag, "prerelease": "-beta." in tag,
+            "assets": [{"name": "update-manifest.json",
+                        "browser_download_url": base + ".json"},
+                       {"name": "update-manifest.json.sig",
+                        "browser_download_url": base + ".json.sig"}]}
+
+
+def _bytes_fetcher(blobs):
+    """A fetch_bytes stand-in mapping URL -> raw bytes (404 otherwise)."""
+    def fetch_bytes(url, token="", timeout=30, limit=0):
+        return (200, blobs[url]) if url in blobs else (404, None)
+    return fetch_bytes
+
+
+def _verify_signed(tmp_path, tag, signers_file, man_bytes=None, sig_bytes=None,
+                   with_sig_asset=True, installed="0.6.5", **kwargs):
+    man_dict = _app()
+    raw = man_bytes if man_bytes is not None else json.dumps(man_dict).encode()
+    base = "%s/m/%s" % (FORGE, tag)
+    rel = _signed_rel(tag) if with_sig_asset else _rel(tag)
+    blobs = {base + ".json": raw}
+    if sig_bytes is not None:
+        blobs[base + ".json.sig"] = sig_bytes
+    version = tmp_path / "version"
+    version.write_text(installed + "\n", encoding="utf-8")
+    return ua.verify_release(
+        tag, config_file=_updates_config(tmp_path),
+        version_file=str(version),
+        fetch=_forge([rel, _rel("0.6.5")], {tag: man_dict}),
+        fetch_bytes=_bytes_fetcher(blobs), signers_file=signers_file, **kwargs)
+
+
+def test_trusted_principals_skips_blanks_and_comments(tmp_path):
+    f = tmp_path / "s"
+    f.write_text("# a comment\n\n  \nalice ssh-ed25519 AAAA\nbob ssh-ed25519 BBBB\n",
+                 encoding="utf-8")
+    assert ua.trusted_principals(str(f)) == ["alice", "bob"]
+    # a missing file (the unconfigured default) reads as "signing off"
+    assert ua.trusted_principals(str(tmp_path / "nope")) == []
+
+
+def test_verify_skips_signing_when_no_key_is_configured(tmp_path):
+    # A comments-only trust anchor (what ships) accepts an unsigned release.
+    signers = tmp_path / "update-signers"
+    signers.write_text("# no key yet\n", encoding="utf-8")
+    out = _verify_signed(tmp_path, "0.6.6", str(signers), with_sig_asset=False)
+    assert out["ok"] is True, out
+
+
+@_needs_keygen
+def test_verify_accepts_a_validly_signed_release(tmp_path):
+    signers, sign = _make_signer(tmp_path)
+    raw = json.dumps(_app()).encode()
+    out = _verify_signed(tmp_path, "0.6.6", signers,
+                         man_bytes=raw, sig_bytes=sign(raw))
+    assert out["ok"] is True, out
+
+
+@_needs_keygen
+def test_verify_rejects_a_tampered_manifest(tmp_path):
+    signers, sign = _make_signer(tmp_path)
+    signed = json.dumps(_app()).encode()
+    # the bytes served differ from the bytes that were signed
+    served = json.dumps({"kind": "app-layer", "commit": SHA, "x": 1}).encode()
+    out = _verify_signed(tmp_path, "0.6.6", signers,
+                         man_bytes=served, sig_bytes=sign(signed))
+    assert out["ok"] is False and "did not verify" in out["error"], out
+
+
+@_needs_keygen
+def test_verify_rejects_a_signature_from_an_untrusted_key(tmp_path):
+    # Two independent keys: the device trusts the first, the release is signed
+    # by the second. A good signature by the wrong key must still be refused.
+    d1 = tmp_path / "trusted"
+    d1.mkdir()
+    d2 = tmp_path / "rogue"
+    d2.mkdir()
+    trusted, _ = _make_signer(d1)
+    _, sign_rogue = _make_signer(d2)
+    raw = json.dumps(_app()).encode()
+    out = _verify_signed(tmp_path, "0.6.6", trusted,
+                         man_bytes=raw, sig_bytes=sign_rogue(raw))
+    assert out["ok"] is False and "did not verify" in out["error"], out
+
+
+@_needs_keygen
+def test_verify_requires_a_signature_asset_when_configured(tmp_path):
+    signers, _ = _make_signer(tmp_path)
+    out = _verify_signed(tmp_path, "0.6.6", signers, with_sig_asset=False)
+    assert out["ok"] is False and "not signed" in out["error"], out
+
+
+@_needs_keygen
+def test_missing_signature_is_not_force_overridable(tmp_path):
+    signers, _ = _make_signer(tmp_path)
+    out = _verify_signed(tmp_path, "0.6.6", signers, with_sig_asset=False,
+                         force=True)
+    assert out["ok"] is False and "not signed" in out["error"], out

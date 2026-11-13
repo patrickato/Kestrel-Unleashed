@@ -682,6 +682,20 @@
       content: "{{ my_image.version }}\n"
       mode: '0644'
 
+  # Release-signing trust anchor (ssh-keygen allowed_signers). Ships with no
+  # key line, so release signing is off and updates install unsigned exactly as
+  # before until a maintainer bakes a public key in. Root-owned and read by the
+  # root update verifier; the in-place update engine deliberately does NOT
+  # rewrite it (a release can't replace its own trust root), so rotating the key
+  # is a reflash. See docs/developer/updates-setup.md.
+  - name: install the kestrel update trust anchor
+    copy:
+      src: "{{ playbook_dir }}/files/update-signers"
+      dest: /etc/kestrel/update-signers
+      owner: root
+      group: root
+      mode: '0644'
+
   - name: create the kestrel capture store directories
     file:
       path: "{{ item }}"

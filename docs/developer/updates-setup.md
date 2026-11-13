@@ -304,8 +304,13 @@ must be ones only root controls:
   git's `GIT_CONFIG_*` environment, so it never appears in a process command
   line other local users can read.
 - Release authenticity rests on TLS to `host` and the GitHub account that
-  publishes releases; releases are not yet signed (tracked in
-  [Deferred improvements](deferred.md)).
+  publishes releases. You can additionally require a cryptographic signature on
+  every in-place update: bake a public key into the image and the device refuses
+  any release whose manifest isn't signed by it, so a compromised release
+  account alone can't push code that runs as root. See
+  [Signing releases](#signing-releases-for-maintainers). Signing is **off** in
+  the public image (no key is shipped), so releases install unsigned until you
+  turn it on.
 
 ## Limitations
 
@@ -376,6 +381,58 @@ to apply it:
 The workflow marks a release `"reflash"` when the diff since the previous
 release (by version; for a stable release, the previous *stable* one) touched build-layer inputs (apt package lists, the base image, boot
 config, or the playbook's non-application tasks); otherwise `"app-layer"`.
+
+## Signing releases (for maintainers)
+
+By default releases are unsigned and a device trusts any release it can reach
+over TLS from the configured account. For a fleet beyond your own bench — where
+the release account or the CI runner is shared — you can require that every
+in-place update carry a signature made by a key you hold, so a release nobody
+signed (or one signed by the wrong key) is refused even by `--force`.
+
+The trust anchor on the device is `/etc/kestrel/update-signers`, an
+[`ssh-keygen` *allowed_signers*](https://man.openbsd.org/ssh-keygen#ALLOWED_SIGNERS)
+file. It ships with **no key line** (comments only), which is what keeps signing
+off in the public image. Turning signing on is a one-time setup plus a reflash
+(the trust anchor is pinned at flash time — the update engine deliberately never
+rewrites it, so a release can't replace its own trust root).
+
+1. **Generate a signing key** on a machine that is *not* the CI runner, with no
+   passphrase (the workflow uses it unattended) and a stable principal name:
+
+   ```bash
+   ssh-keygen -t ed25519 -C kestrel-release -f kestrel-release-key
+   ```
+
+   Keep `kestrel-release-key` (the private key) offline and backed up. Never
+   commit it.
+
+2. **Bake the public key into the image.** Put one line in
+   `builder/extra/files/update-signers`, in allowed_signers form — the principal,
+   then the contents of `kestrel-release-key.pub`:
+
+   ```
+   kestrel-release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+   ```
+
+   Commit that (the public key is not a secret) and build/flash an image. Every
+   device from that image now requires a signature.
+
+3. **Give the Release workflow the private key.** Add the full contents of
+   `kestrel-release-key` as the repo Actions secret **`UPDATE_SIGNING_KEY`**
+   (Settings → Secrets and variables → Actions). With the secret set, the
+   workflow signs `update-manifest.json` with `ssh-keygen -Y sign` (namespace
+   `kestrel-update`) and attaches `update-manifest.json.sig` to the release. With
+   the secret unset the signing step is a no-op and the release ships unsigned.
+
+The device re-fetches the manifest and its `.sig` as root and runs
+`ssh-keygen -Y verify` against `update-signers` before it will install
+(`update-apply.py`). A missing or bad signature is a hard refusal.
+
+**Rotating the key** is a reflash: add the new public key line to
+`update-signers` (keep the old line until every device is on the new image so
+in-flight releases still verify), flash, then switch `UPDATE_SIGNING_KEY` to the
+new private key and drop the old line in a later image.
 
 ## Configuration reference
 
