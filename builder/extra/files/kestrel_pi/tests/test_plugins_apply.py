@@ -1052,13 +1052,27 @@ def test_whitelist_bad_requests_never_run_the_cli(env, monkeypatch, change):
     assert calls == []
 
 
-def test_whitelist_refused_while_web_auth_is_off(env, monkeypatch):
+def test_whitelist_remove_refused_while_web_auth_is_off(env, monkeypatch):
+    # Removing a whitelist entry re-exposes an AP to attack, so it is a real web
+    # control and stays gated at the apply layer when web auth is off.
     cs.set_value(str(env / "config.toml"), "web", "auth", '"none"')
     calls = _stub_cli(monkeypatch)
     reply = ctl.apply_change({"target": "capture-whitelist",
-                              "action": "add", "entry": "Home"})
+                              "action": "remove", "entry": "Home"})
     assert reply["ok"] is False and "web auth" in reply["error"]
     assert calls == []
+
+
+def test_whitelist_add_is_allowed_as_automation_when_web_auth_is_off(env, monkeypatch):
+    # A whitelist ADD only *reduces* attacking and is driven by the auto-whitelist
+    # plugin as automation, so it is allowed regardless of web auth (like power).
+    # The web ADD path stays gated at the route (auth + CSRF before apply).
+    cs.set_value(str(env / "config.toml"), "web", "auth", '"none"')
+    calls = _stub_cli(monkeypatch)
+    reply = ctl.apply_change({"target": "capture-whitelist",
+                              "action": "add", "entry": "AA:BB:CC:DD:EE:01"})
+    assert reply["ok"] is True
+    assert calls and calls[0][:3] == ["capture", "whitelist", "add"]
 
 
 # -- restart Bluetooth pairing from the web (Phase 1 re-pair) ----------------
@@ -1158,3 +1172,50 @@ def test_config_set_capture_change_does_not_restart(env):
     reply = ctl.apply_change(_set_config("capture", "max_run_mb", 256))
     assert reply["ok"] and reply["restart"] is False
     assert "capture" in reply["restart_hint"].lower()
+
+
+# -- clock-set (GPS, offline) -----------------------------------------------
+import types as _types                                       # noqa: E402
+
+_GOOD_EPOCH = 1735689600   # 2025-01-01T00:00:00Z, inside the allowed window
+
+
+def test_clock_set_rejects_a_non_integer_or_out_of_window_epoch():
+    assert ctl.apply_clock_set({"epoch": "123"})["ok"] is False
+    assert ctl.apply_clock_set({"epoch": True})["ok"] is False   # bool is not an int here
+    assert ctl.apply_clock_set({"epoch": 100})["ok"] is False    # before the window
+    assert ctl.apply_clock_set({"epoch": 9_999_999_999})["ok"] is False
+
+
+def test_clock_set_skips_when_ntp_already_synced(monkeypatch):
+    monkeypatch.setattr(ctl, "_ntp_synced", lambda: True)
+    called = {"n": 0}
+    monkeypatch.setattr(ctl.subprocess, "run",
+                        lambda *a, **k: called.__setitem__("n", called["n"] + 1))
+    reply = ctl.apply_clock_set({"epoch": _GOOD_EPOCH})
+    assert reply["ok"] is True and reply.get("skipped")
+    assert called["n"] == 0                                  # date was never run
+
+
+def test_clock_set_runs_date_when_unsynced(monkeypatch):
+    monkeypatch.setattr(ctl, "_ntp_synced", lambda: False)
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        return _types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ctl.subprocess, "run", fake_run)
+    reply = ctl.apply_clock_set({"epoch": _GOOD_EPOCH})
+    assert reply["ok"] is True and reply["clock_set"] == _GOOD_EPOCH
+    assert seen["argv"][0].endswith("/date")
+    assert "@%d" % _GOOD_EPOCH in seen["argv"]
+
+
+def test_clock_set_via_dispatcher(monkeypatch):
+    monkeypatch.setattr(ctl, "_ntp_synced", lambda: False)
+    monkeypatch.setattr(ctl.subprocess, "run",
+                        lambda *a, **k: _types.SimpleNamespace(
+                            returncode=0, stdout="", stderr=""))
+    reply = ctl.apply_change({"target": "clock-set", "epoch": _GOOD_EPOCH})
+    assert reply["ok"] is True and reply["clock_set"] == _GOOD_EPOCH

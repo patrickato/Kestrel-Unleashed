@@ -374,6 +374,10 @@ port = 2947
 #   baud is ignored for USB CDC-ACM devices.
 device = "/dev/ttyACM0"
 baud = 9600
+# The Pi has no battery clock; when this is on and the device is OFFLINE, gps
+# sets the system clock from the GPS fix (date+time from a valid lock). Network
+# time (NTP) wins whenever a management link is online. false = leave it alone.
+set_clock = true
 
 [plugins.map]
 enabled = false             # wardriving map: located networks + route + live cursor

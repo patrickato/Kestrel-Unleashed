@@ -769,6 +769,61 @@ def apply_capture_whitelist(change):
     return {"ok": True, "whitelist": action, "restart": False}
 
 
+# The GPS clock may be set only to a plausible wall-clock window (2024-01-01 ..
+# 2035-01-01). A fix outside this is a garbled parse, not a real time.
+_CLOCK_MIN_EPOCH = 1704067200   # 2024-01-01T00:00:00Z
+_CLOCK_MAX_EPOCH = 2051222400   # 2035-01-01T00:00:00Z
+
+
+def _ntp_synced():
+    """True when systemd-timesyncd has already synced the clock (so a GPS fix
+    must not override it); False when it has not; None when undeterminable."""
+    try:
+        out = subprocess.run(
+            ["/usr/bin/timedatectl", "show", "-p", "NTPSynchronized", "--value"],
+            capture_output=True, text=True, timeout=10, check=False,
+            stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    val = (out.stdout or "").strip().lower()
+    if val in ("yes", "true", "1"):
+        return True
+    if val in ("no", "false", "0"):
+        return False
+    return None
+
+
+def apply_clock_set(change):
+    """Set the system clock from a GPS fix (the gps plugin, when offline):
+
+      {"target": "clock-set", "epoch": <int seconds since the UTC epoch>}
+
+    The Pi 5 has no RTC, so an offline boot has a wrong clock until GPS or NTP
+    fixes it. This sets it from GPS **only** when systemd-timesyncd has not
+    already synced -- NTP (whenever a management link, e.g. a phone tether, is
+    online) is authoritative and wins. The epoch is bounded to a plausible
+    window so a garbled fix can't set an absurd time, and it is a validated
+    integer, never interpolated as a string."""
+    epoch = change.get("epoch")
+    if not isinstance(epoch, int) or isinstance(epoch, bool):
+        return {"ok": False, "error": "clock-set needs an integer epoch"}
+    if not (_CLOCK_MIN_EPOCH <= epoch <= _CLOCK_MAX_EPOCH):
+        return {"ok": False, "error": "clock-set epoch out of the allowed window"}
+    if _ntp_synced() is True:
+        return {"ok": True, "skipped": "NTP already synced; leaving the clock to it"}
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/date", "-u", "-s", "@%d" % epoch],
+            capture_output=True, text=True, timeout=10, check=False,
+            stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "error": "could not set the clock: %s" % exc}
+    if proc.returncode != 0:
+        return {"ok": False, "error": (proc.stderr or "date failed").strip()[:200]}
+    sys.stderr.write("plugins-ctl apply: clock set from GPS to @%d\n" % epoch)
+    return {"ok": True, "clock_set": epoch}
+
+
 def apply_power(change):
     """Reboot or shut the device down:
 
@@ -1056,6 +1111,16 @@ def apply_change(change):
     # buttons stay gated on web auth at the route, with their own confirm step.
     if change.get("target") == "power":
         return apply_power(change)
+    # Plugin-driven automation, not a web control, so allowed regardless of web
+    # auth (like power, which the ups-hat plugin drives). clock-set is the gps
+    # plugin correcting an offline clock (bounded + NTP-guarded in the handler);
+    # a capture-whitelist ADD is the auto-whitelist plugin, and only ever
+    # *reduces* attacking. A whitelist REMOVE (a control that re-exposes an AP)
+    # stays gated below, as do all the real web controls.
+    if change.get("target") == "clock-set":
+        return apply_clock_set(change)
+    if change.get("target") == "capture-whitelist" and change.get("action") == "add":
+        return apply_capture_whitelist(change)
     if not web_control_ready(config):
         return {"ok": False, "error": "plugin controls are off: turn on web auth "
                 "first (sudo kestrel web auth basic)"}

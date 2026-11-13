@@ -2395,3 +2395,65 @@ def test_backup_refused_without_passwordless_ssh(tmp_path):
     result = plugin.on_webhook("backup-now", _req(method="POST"))
     assert result.error and "passwordless SSH is not set up" in result.message
     assert sent == []
+
+
+# -- GPS clock-sync (offline, from RMC) -------------------------------------
+_RMC = "$GPRMC,000000,A,4807.038,N,01131.000,E,000.0,000.0,010125,,*00"
+_RMC_EPOCH = 1735689600   # 2025-01-01T00:00:00Z
+
+
+def test_nmea_epoch_parses_rmc():
+    mod = _load_module("gps.py", "gps_epoch_test")
+    assert mod.nmea_epoch(_RMC.split("*")[0]) == _RMC_EPOCH
+    assert mod.nmea_epoch("$GPRMC,000000,V,,,,,,,010125,,") is None   # void status
+    assert mod.nmea_epoch("$GPGGA,123519,4807.038,N,x,x,1,08") is None  # not RMC
+    assert mod.nmea_epoch("garbage") is None
+
+
+def _gps_for_clock(tmp_path, apply_fn, options=None):
+    import logging
+    import threading
+    mod = _load_module("gps.py", "gps_clock_%d" % id(apply_fn))
+    plugin = mod.GPS()
+    plugin.options = {} if options is None else options
+    plugin.context = _ctx(tmp_path, ("location", "capture-read", "ui"), name="gps")
+    plugin.context.apply = apply_fn
+    plugin.log = logging.getLogger("test.gps")
+    plugin._fix_lock = threading.Lock()
+    plugin._last_clock_sync = None
+    return mod, plugin
+
+
+def test_gps_sets_clock_when_offline_and_wrong(tmp_path):
+    sent = []
+    _mod, plugin = _gps_for_clock(
+        tmp_path, lambda c: sent.append(c) or {"ok": True, "clock_set": c["epoch"]})
+    plugin._handle_nmea(_RMC)   # real wall clock is far from 2025-01-01 -> sync
+    assert sent == [{"target": "clock-set", "epoch": _RMC_EPOCH}]
+
+
+def test_gps_skips_clock_within_slack(tmp_path, monkeypatch):
+    sent = []
+    mod, plugin = _gps_for_clock(
+        tmp_path, lambda c: sent.append(c) or {"ok": True})
+    monkeypatch.setattr(mod.time, "time", lambda: _RMC_EPOCH + 5)   # clock is fine
+    plugin._handle_nmea(_RMC)
+    assert sent == []
+
+
+def test_gps_clock_sync_is_throttled(tmp_path):
+    sent = []
+    _mod, plugin = _gps_for_clock(
+        tmp_path, lambda c: sent.append(c) or {"ok": True, "clock_set": c["epoch"]})
+    plugin._handle_nmea(_RMC)
+    plugin._handle_nmea(_RMC)   # within CLOCK_SYNC_INTERVAL_S -> no second attempt
+    assert len(sent) == 1
+
+
+def test_gps_set_clock_option_off(tmp_path):
+    sent = []
+    _mod, plugin = _gps_for_clock(
+        tmp_path, lambda c: sent.append(c) or {"ok": True},
+        options={"set_clock": False})
+    plugin._handle_nmea(_RMC)
+    assert sent == []

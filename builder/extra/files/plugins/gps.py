@@ -27,6 +27,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import datetime as _dt
 import select
 import socket
 import termios
@@ -34,6 +35,35 @@ import threading
 import time
 
 from kestrel_pi import Plugin
+
+# Clock-sync (from GPS, when offline): only correct a drift larger than this, and
+# at most this often, so a valid-fix stream doesn't hammer the root apply socket.
+CLOCK_SYNC_SLACK_S = 30
+CLOCK_SYNC_INTERVAL_S = 300
+
+
+def nmea_epoch(body):
+    """UTC epoch (int seconds) from an ``RMC`` sentence body (the ``*hh``
+    checksum already stripped), or ``None``. RMC is the only common sentence that
+    carries both the date and the time; only a valid (status ``A``) fix with a
+    parseable date+time yields a value. Pure/stdlib, so it is unit-tested with no
+    receiver."""
+    parts = body.split(",")
+    if len(parts) < 10 or body[3:6] != "RMC":
+        return None
+    if parts[2] != "A":                 # status: A = valid, V = navigation warning
+        return None
+    t, d = parts[1], parts[9]
+    if len(t) < 6 or len(d) != 6:
+        return None
+    try:
+        hh, mm, ss = int(t[0:2]), int(t[2:4]), int(t[4:6])
+        dd, mo, yy = int(d[0:2]), int(d[2:4]), int(d[4:6])
+        when = _dt.datetime(2000 + yy, mo, dd, hh, mm, ss,
+                            tzinfo=_dt.timezone.utc)
+    except (ValueError, OverflowError):
+        return None
+    return int(when.timestamp())
 
 # The cross-process GPS seam (Phase 4.8): the latest fix, written here atomically
 # whenever it updates, for the out-of-process learning agent to read best-effort
@@ -155,6 +185,10 @@ class GPS(Plugin):
         "port": {"type": "int", "default": 2947},
         "device": {"type": "str", "default": "/dev/ttyACM0"},
         "baud": {"type": "int", "default": 9600},
+        # Set the system clock from the GPS fix when the device is offline and
+        # systemd-timesyncd has not synced (the Pi has no RTC). NTP wins whenever
+        # a management link is online; this only fills the offline gap.
+        "set_clock": {"type": "bool", "default": True},
     }
 
     def on_loaded(self):
@@ -177,6 +211,7 @@ class GPS(Plugin):
         cap = getattr(self.context, "capture", None)
         self._store_dir = getattr(cap, "store_dir", None)
         self._track_last = None
+        self._last_clock_sync = None    # monotonic of the last GPS clock-set attempt
         self._fix_lock = threading.Lock()
         self._stop = threading.Event()
         self._reader = threading.Thread(target=self._run, name="gps-reader", daemon=True)
@@ -610,6 +645,9 @@ class GPS(Plugin):
         if kind == "GSV":
             self._handle_gsv(body)
             return
+        if kind == "RMC":
+            self._maybe_sync_clock(body)   # RMC carries the only date+time
+            return
         if kind != "GGA":
             return
         parts = body.split(",")
@@ -634,6 +672,37 @@ class GPS(Plugin):
             self._set_fix(lat, lon, alt)
         else:
             self._set_mode(0)
+
+    def _maybe_sync_clock(self, body):
+        """Set the system clock from an RMC fix when offline and the clock is
+        wrong. Throttled, and only when the drift exceeds the slack, so a healthy
+        1 Hz RMC stream doesn't hammer the apply socket. The root helper is the
+        final gate: it refuses an out-of-window epoch and skips when NTP has
+        already synced, so this never fights systemd-timesyncd."""
+        if not bool(self.options.get("set_clock", True)):
+            return
+        epoch = nmea_epoch(body)
+        if epoch is None:
+            return
+        now = time.monotonic()
+        if self._last_clock_sync is not None and \
+                now - self._last_clock_sync < CLOCK_SYNC_INTERVAL_S:
+            return
+        if abs(time.time() - epoch) < CLOCK_SYNC_SLACK_S:
+            return
+        self._last_clock_sync = now
+        try:
+            reply = self.context.apply({"target": "clock-set", "epoch": epoch})
+        except Exception as exc:  # noqa: BLE001 - never let a sync break the reader
+            self.log.debug("gps: clock-set apply failed: %s", exc)
+            return
+        if reply.get("ok") and reply.get("clock_set"):
+            self.log.info("set the system clock from GPS")
+        elif reply.get("ok"):
+            self.log.debug("gps: clock-set skipped (%s)",
+                           reply.get("skipped") or "no change")
+        else:
+            self.log.debug("gps: clock-set refused: %s", reply.get("error"))
 
     def _handle_gsv(self, body):
         """Accumulate per-satellite C/N0 from ``GSV`` and set the running mean
