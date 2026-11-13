@@ -683,6 +683,30 @@ logic, the web layer, the CLI and a plugin; the new plugin option defaults to
 `off` (no config.toml change), so existing devices are unchanged until set.
 Tests: +2; 1237 pass, 12 skipped, lint clean.
 
+### Added: stop the crack job running right now (not just pause)
+Pause lets the current job finish before holding — fine, but a wordlist pass can
+be hours, so there was no way to abort *this* job. Added a true stop: it kills
+the live cracker mid-pass, and the AP it was on stays **pending** (it is not
+marked tried, so it is not falsely exhausted and will be attempted again).
+
+- `crack/store.py`: the control file gains a monotonic `stop_seq`; `request_stop`
+  bumps it (preserving paused), `set_paused` preserves it, `read_control` reports
+  both.
+- `crack/controller.py`: the worker captures `stop_seq` at the start of each pass
+  (`_should_stop`), the streaming aircrack/John loops poll it and `kill()` the
+  process when it advances, and `_run_attack`/`_john_attack` return a `stopped`
+  set so an aborted (or not-yet-started) AP is kept out of 'tried'. An aborted
+  pass reports idle and sleeps rather than hot-looping; a key cracked before the
+  abort is still recorded. The next pass captures the new counter, so it is not
+  re-stopped.
+- `/loot`: a **Stop current** button next to Pause/Resume, shown only while a job
+  is actually cracking. CLI: `kestrel crack stop`.
+
+Touched: `crack/store.py`, `crack/controller.py`, `web.py`, `kestrel.sh`,
+`userguide.py`, tests, changelog. Release impact: **app-layer-safe** — the
+package, the web layer and the CLI; no new deps/units/config. Tests: +3; 1240
+pass, 12 skipped, lint clean.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

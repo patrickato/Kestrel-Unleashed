@@ -538,6 +538,48 @@ def test_manual_job_overrides_and_runs(tmp_path):
     assert store_mod.queue_len(worker.crack_dir) == 0       # job consumed
 
 
+def test_stop_current_aborts_without_marking_tried(tmp_path):
+    # A manual job over two APs; a stop lands while the first AP is cracking.
+    # The running AP is aborted and the rest are left untouched -- neither is
+    # marked 'tried' (so they stay pending, not falsely exhausted), the worker
+    # does not error, and the job is consumed.
+    d = str(tmp_path)
+    _write(os.path.join(d, "wordlists", "small.txt"), "nope\n")
+    capfile = os.path.join(d, "capture", "nets.hc22000")
+    _write(capfile, _hashline(AP1, "One") + "\n" + _hashline(AP2, "Two") + "\n")
+    cfg = _config(d, os.path.join(d, "wordlists"))
+    crack_dir = os.path.join(d, "crack")
+    base = FakeAircrack()                       # cracks nothing
+
+    class StopOnFirstCrack:
+        def __init__(self):
+            self.calls = 0
+
+        def __call__(self, cmd, timeout=None):
+            rc = base(cmd, timeout=timeout)
+            if cmd[0] == "aircrack-ng":
+                self.calls += 1
+                if self.calls == 1:
+                    store_mod.request_stop(crack_dir)   # abort mid-pass
+            return rc
+
+    runner = StopOnFirstCrack()
+    worker = _worker(tmp_path, cfg, runner)
+    store_mod.enqueue_job(crack_dir, [capfile],
+                          os.path.join(d, "wordlists", "small.txt"), label="batch")
+    state, did = worker.run_once()
+    aps = worker.loot.load()
+    assert runner.calls == 1                    # only the first AP was attempted
+    assert aps[AP1C]["tried"] == [] and aps[AP1C]["status"] == "pending"
+    assert aps[AP2C]["tried"] == [] and aps[AP2C]["status"] == "pending"
+    assert state == "idle" and did is False     # aborted: idle, no hot-loop
+    assert store_mod.queue_len(crack_dir) == 0  # the manual job was consumed
+    # a later pass (new baseline) runs normally and marks tried
+    worker.run_once()                           # auto pass, no stop pending now
+    assert any(str(t).startswith("small.txt:")
+               for t in worker.loot.load()[AP1C]["tried"])
+
+
 def test_disabled_and_no_wordlists(tmp_path):
     d = str(tmp_path)
     _write(os.path.join(d, "capture", "nets.hc22000"), _hashline(AP1, "Net") + "\n")
@@ -753,12 +795,21 @@ def test_queue_clear_and_pause_controls(tmp_path):
     store_mod.enqueue_job(crack, ["/x/a.hc22000"], wordlist="rockyou.txt", label="j1")
     store_mod.enqueue_job(crack, ["/x/b.hc22000"], mask="?d?d?d?d", label="j2")
     assert store_mod.queue_len(crack) == 2
-    # pause / resume roundtrip (default is not paused)
-    assert store_mod.read_control(crack) == {"paused": False}
+    # pause / resume roundtrip (default is not paused, stop counter at 0)
+    assert store_mod.read_control(crack) == {"paused": False, "stop_seq": 0}
     store_mod.set_paused(crack, True)
     assert store_mod.read_control(crack)["paused"] is True
     store_mod.set_paused(crack, False)
     assert store_mod.read_control(crack)["paused"] is False
+    # request_stop bumps a monotonic counter and preserves paused; set_paused
+    # preserves the counter.
+    store_mod.set_paused(crack, True)
+    assert store_mod.request_stop(crack) == 1
+    assert store_mod.request_stop(crack) == 2
+    ctl = store_mod.read_control(crack)
+    assert ctl == {"paused": True, "stop_seq": 2}       # paused kept across stops
+    store_mod.set_paused(crack, False)
+    assert store_mod.read_control(crack)["stop_seq"] == 2  # counter kept across pause
     # clearing removes every pending job
     assert store_mod.clear_queue(crack) == 2
     assert store_mod.queue_len(crack) == 0

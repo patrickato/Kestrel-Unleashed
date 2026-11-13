@@ -1199,6 +1199,34 @@ def test_loot_group_form_and_batch_crack(monkeypatch, tmp_path):
     assert job["label"] == "group:doorbell"
 
 
+def test_crack_control_strip_shows_stop_only_while_cracking():
+    base = {"enabled": True, "status": {
+        "state": "cracking", "paused": False, "queue_jobs": [],
+        "current": {"essid": "Net", "wordlist": "rockyou.txt"}}}
+    html = web._crack_control_strip(base, _ctl())
+    assert "Stop current" in html and 'value="stop"' in html
+    # not offered when paused or idle (nothing is running to stop)
+    base["status"]["paused"] = True
+    assert "Stop current" not in web._crack_control_strip(base, _ctl())
+    base["status"].update(paused=False, state="idle")
+    assert "Stop current" not in web._crack_control_strip(base, _ctl())
+
+
+def test_loot_stop_current_requests_stop(monkeypatch, tmp_path):
+    from kestrel_pi.crack import store as crack_store
+
+    crackdir = tmp_path / "crack"
+    crackdir.mkdir()
+    monkeypatch.setattr(web, "CRACK_DIR", str(crackdir))
+    client, _ = _client(monkeypatch, tmp_path, BASIC)
+    page = client.get("/loot", headers=_basic()).get_data(as_text=True)
+    resp = client.post("/loot", headers=_basic(),
+                       data={"csrf": _csrf(page), "action": "crack-control",
+                             "ctl": "stop"}, follow_redirects=False)
+    assert resp.status_code == 303
+    assert crack_store.read_control(str(crackdir))["stop_seq"] == 1
+
+
 def test_loot_crack_group_rejects_bad_group(monkeypatch, tmp_path):
     from kestrel_pi.crack import store as crack_store
 

@@ -87,6 +87,7 @@ Usage: $PROG <command>
   crack enable       Enable quick-crack (auto-crack new handshakes); disable to stop
   crack pause        Soft-pause the worker (finishes the current job, then holds)
   crack resume       Resume after a pause
+  crack stop         Abort the job running right now (the AP stays pending)
   crack queue        Show the pending manual-job queue
   crack clear-queue  Remove all pending queued jobs (current job unaffected)
   crack clear --yes  Clear the loot store (captures and wordlists untouched)
@@ -2133,10 +2134,11 @@ cmd_crack() {
         disable) cmd_crack_disable ;;
         pause) cmd_crack_pause ;;
         resume) cmd_crack_resume ;;
+        stop) cmd_crack_stop ;;
         queue) cmd_crack_queue ;;
         clear-queue) cmd_crack_clear_queue ;;
         clear) cmd_crack_clear "$@" ;;
-        *) die "unknown 'crack' subcommand: $sub (status|watch|list|show|suggest|groups|all|wordlists|run|kit|ingest|enable|disable|pause|resume|queue|clear-queue|clear)" ;;
+        *) die "unknown 'crack' subcommand: $sub (status|watch|list|show|suggest|groups|all|wordlists|run|kit|ingest|enable|disable|pause|resume|stop|queue|clear-queue|clear)" ;;
     esac
 }
 
@@ -2151,6 +2153,14 @@ cmd_crack_pause() {
 cmd_crack_resume() {
     run_as_pi "$PWN_VENV_PYTHON" -I -c 'from kestrel_pi.crack import store, CRACK_DIR; store.set_paused(CRACK_DIR, False)'
     log "crack worker resumed"
+}
+
+# Abort the job cracking RIGHT NOW (kills the live aircrack/John mid-pass),
+# distinct from pause (which lets the current job finish first). The aborted AP
+# stays pending -- it is not marked tried. The worker picks up the next job.
+cmd_crack_stop() {
+    run_as_pi "$PWN_VENV_PYTHON" -I -c 'from kestrel_pi.crack import store, CRACK_DIR; store.request_stop(CRACK_DIR)'
+    log "asked the crack worker to stop the current job (it stays pending, not exhausted)"
 }
 
 # Show the pending manual-job queue (what is lined up, oldest first).

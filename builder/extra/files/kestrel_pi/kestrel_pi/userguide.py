@@ -315,6 +315,7 @@ kestrel crack run HomeWiFi.hc22000 --wordlist rockyou.txt   # re-run one capture
 kestrel crack queue                  # what manual jobs are lined up
 kestrel crack pause                  # soft-pause the worker (finishes the current job, then holds)
 kestrel crack resume                 # resume after a pause
+kestrel crack stop                   # abort the job running right now (the AP stays pending)
 kestrel crack clear-queue            # drop all pending queued jobs
 sudo kestrel crack disable           # turn auto-cracking off (and enable to turn back on)
 ```
@@ -323,7 +324,10 @@ sudo kestrel crack disable           # turn auto-cracking off (and enable to tur
 state (cracking / idle / **paused**), what it's cracking now, and the pending
 **queue**, with **Pause**/**Resume** and **Clear queue** buttons (login on).
 Pause is a soft hold — the current job finishes, then the worker idles until you
-resume — distinct from `disable`, which is the hard off. An AP that has been
+resume — distinct from `disable`, which is the hard off. While a job is actually
+cracking a **Stop current** button appears: it aborts *that* job immediately
+(kills the live cracker) instead of waiting for it to finish, and the network it
+was on stays **pending** — it is not marked tried, so it will be attempted again. An AP that has been
 tried against every wordlist is marked **exhausted** and is not re-cracked (even
 after a reboot); those are the ones worth sending to the GPU kit.
 
@@ -871,6 +875,7 @@ This is the same mechanism as the first-boot Wi-Fi staging, and it works at any 
 | `kestrel crack run FILE... [--wordlist NAME\|all \| --mask '?d?d?d?d?d?d?d?d'] [--rules NAME]` | Queue a manual crack (wordlist or brute-force mask) of one or more capture files. |
 | `kestrel crack enable` / `disable` | Turn on-device cracking on or off (hard). |
 | `kestrel crack pause` / `resume` | Soft-pause the worker (current job finishes) / resume. |
+| `kestrel crack stop` | Abort the job running right now (kills the live cracker; the AP stays pending, not exhausted). |
 | `kestrel crack queue` / `clear-queue` | Show the pending job queue / drop all pending jobs. |
 | `kestrel crack clear --yes` | Clear the loot store (captures and wordlists untouched). |
 

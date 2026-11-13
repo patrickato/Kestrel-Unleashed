@@ -225,7 +225,8 @@ class CrackWorker:
             except OSError:
                 pass
 
-    def _run_dict_streaming(self, pcaps, bssid, wl, timeout, on_progress):  # pragma: no cover
+    def _run_dict_streaming(self, pcaps, bssid, wl, timeout, on_progress,
+                            should_stop=None):  # pragma: no cover
         """Run a dictionary crack with a live feed: aircrack-ng *without* ``-q``,
         its repainting status read as it comes and handed to ``on_progress`` a few
         times a second. Returns ``(rc, text, "")`` like the injected runner, with
@@ -249,6 +250,10 @@ class CrackWorker:
                 if deadline and self._clock() > deadline:
                     proc.kill()
                     rc = 124
+                    break
+                if should_stop and should_stop():   # operator aborted this job
+                    proc.kill()
+                    rc = 125
                     break
                 ready, _, _ = select.select([proc.stdout], [], [], flush_every)
                 if ready:
@@ -308,7 +313,8 @@ class CrackWorker:
                 rc, out, err = self._run_dict_streaming(
                     pcaps, bssid, wl, timeout,
                     lambda prog: progress_mod.write_progress(
-                        self.crack_dir, dict(base, **prog), now=self._clock()))
+                        self.crack_dir, dict(base, **prog), now=self._clock()),
+                    should_stop=self._should_stop)
             else:
                 rc, out, err = self._runner(ac.build_dict_cmd(pcaps, bssid, wl),
                                             timeout=timeout)
@@ -330,30 +336,59 @@ class CrackWorker:
 
     def _run_attack(self, targets, attack, conf, pcaps, origin=""):
         """Run ``attack`` against each target AP. Returns
-        ``(cracked, failed, no_handshake)``: ``cracked`` is ``{BSSID: password}``,
-        ``failed`` the BSSIDs whose run genuinely errored, and ``no_handshake``
-        the BSSIDs with no crackable handshake yet (both kept out of 'tried' so
-        they retry once a handshake lands, but only ``failed`` marks the worker)."""
-        cracked, failed, no_handshake = {}, set(), set()
-        for target in targets:
+        ``(cracked, failed, no_handshake, stopped)``: ``cracked`` is
+        ``{BSSID: password}``, ``failed`` the BSSIDs whose run genuinely errored,
+        ``no_handshake`` the BSSIDs with no crackable handshake yet, and
+        ``stopped`` the BSSIDs left unfinished by an operator stop. All three of
+        failed/no_handshake/stopped are kept out of 'tried' so the AP retries;
+        only ``failed`` marks the worker as errored."""
+        cracked, failed, no_handshake, stopped = {}, set(), set(), set()
+
+        def _rest(i):
+            return {(t.get("bssid") or "").upper()
+                    for t in targets[i:] if t.get("bssid")}
+
+        for i, target in enumerate(targets):
             bssid = (target.get("bssid") or "").upper()
             if not bssid:
                 continue
+            if self._should_stop():               # asked to abort before this AP
+                stopped |= _rest(i)
+                self._stopped = True
+                break
             password, ok, reason = self._crack_one(
                 pcaps, bssid, attack, conf,
                 essid=target.get("essid") or "", origin=origin)
             if password is not None:
-                cracked[bssid] = password
-            elif reason == "no-handshake":
+                cracked[bssid] = password          # a crack always counts, even
+                continue                           # if a stop raced in after it
+            if self._should_stop():                # the run was killed mid-crack
+                stopped |= _rest(i)
+                self._stopped = True
+                break
+            if reason == "no-handshake":
                 no_handshake.add(bssid)
             elif not ok:
                 failed.add(bssid)
-        return cracked, failed, no_handshake
+        return cracked, failed, no_handshake, stopped
 
     # -- one pass ---------------------------------------------------------
+    def _should_stop(self):
+        """True once the operator has asked to abort the job running now -- i.e.
+        the control file's ``stop_seq`` has advanced past the value captured when
+        this pass began (:meth:`run_once`). Cheap (a small JSON read); polled in
+        the streaming crack loops and between targets."""
+        return (store_mod.read_control(self.crack_dir).get("stop_seq", 0)
+                > getattr(self, "_stop_baseline", 0))
+
     def run_once(self):
         """Do at most one unit of work. Returns ``(state, did_work)``."""
         conf = self.config()
+        # Capture the stop counter for this pass up front; a request that lands
+        # mid-pass advances it and _should_stop() then fires, aborting the live
+        # crack. The next pass captures the new value, so it is not re-stopped.
+        self._stop_baseline = store_mod.read_control(self.crack_dir).get("stop_seq", 0)
+        self._stopped = False
         aps = self.loot.load()
         targets = targets_from_events(self._all_events())
         for target in targets:
@@ -435,6 +470,12 @@ class CrackWorker:
         else:
             state = "no-cracker"        # neither john nor aircrack is installed
 
+        if self._stopped:
+            # The operator aborted the running job: report idle (not a frozen
+            # "cracking") and let the worker sleep rather than hot-loop. Any key
+            # cracked before the abort was still recorded above.
+            state, current, did_work = "idle", None, False
+
         LootStore.refresh_statuses(aps, all_sigs)
         self.loot.save(aps)
         # An aircrack failure this pass takes precedence over idle/cracking, so the
@@ -491,7 +532,8 @@ class CrackWorker:
         the caller can go idle (and sleep) instead of hot-looping on a batch that
         was all no-handshake/errored APs."""
         attack, tgts = batch
-        cracked, failed, no_hs = self._run_attack(tgts, attack, conf, pcaps, "auto")
+        cracked, failed, no_hs, stopped = self._run_attack(
+            tgts, attack, conf, pcaps, "auto")
         now = self._clock()
         progressed = bool(cracked)
         for target in tgts:
@@ -504,8 +546,8 @@ class CrackWorker:
                 LootStore.mark_cracked(rec, cracked[bssid], attack["name"], now=now)
             elif bssid in no_hs:
                 rec["no_handshake"] = True     # waiting for a handshake; not tried
-            elif bssid in failed:
-                continue                        # real error: stays pending, retries
+            elif bssid in failed or bssid in stopped:
+                continue                        # errored or aborted: stays pending
             else:
                 # Record the wordlist as tried only when aircrack actually ran it.
                 rec["no_handshake"] = False
@@ -532,8 +574,9 @@ class CrackWorker:
         targets = targets_from_events(events)
         for target in targets:
             LootStore.upsert(aps, target, now=self._clock())
-        cracked, failed, no_hs = self._run_attack(targets, attack, conf, pcaps, "manual") \
-            if targets else ({}, set(), set())
+        cracked, failed, no_hs, stopped = self._run_attack(
+            targets, attack, conf, pcaps, "manual") \
+            if targets else ({}, set(), set(), set())
         now = self._clock()
         for target in targets:
             bssid = target["bssid"].upper()
@@ -545,7 +588,7 @@ class CrackWorker:
                 LootStore.mark_cracked(rec, cracked[bssid], attack["name"], now=now)
             elif bssid in no_hs:
                 rec["no_handshake"] = True
-            elif attack["sig"] and bssid not in failed:
+            elif attack["sig"] and bssid not in failed and bssid not in stopped:
                 rec["no_handshake"] = False
                 LootStore.mark_tried(rec, attack["sig"])
         store_mod.remove_job(path)
@@ -602,20 +645,35 @@ class CrackWorker:
         return ("cracking", True, current) if progressed else ("idle", False, None)
 
     def _john_attack(self, targets, attack, conf, origin):
-        """Run ``attack`` (John) against each target AP; ``{BSSID: password}``."""
-        cracked = {}
-        for target in targets:
+        """Run ``attack`` (John) against each target AP. Returns
+        ``(cracked, stopped)`` -- ``stopped`` is the BSSIDs left unfinished by an
+        operator stop, kept out of 'tried' so they retry."""
+        cracked, stopped = {}, set()
+
+        def _rest(i):
+            return {(t.get("bssid") or "").upper()
+                    for t in targets[i:] if t.get("bssid")}
+
+        for i, target in enumerate(targets):
             bssid = (target.get("bssid") or "").upper()
             if not bssid:
                 continue
+            if self._should_stop():
+                stopped |= _rest(i)
+                self._stopped = True
+                break
             password = self._crack_one_john(target, attack, conf, origin)
             if password:
                 cracked[bssid] = password
-        return cracked
+            elif self._should_stop():          # killed mid-crack
+                stopped |= _rest(i)
+                self._stopped = True
+                break
+        return cracked, stopped
 
     def _run_auto_john(self, batch, aps, conf):
         attack, tgts = batch
-        cracked = self._john_attack(tgts, attack, conf, "auto")
+        cracked, stopped = self._john_attack(tgts, attack, conf, "auto")
         now = self._clock()
         progressed = False
         for target in tgts:
@@ -623,6 +681,8 @@ class CrackWorker:
             rec = aps.get(bssid)
             if rec is None:
                 continue
+            if bssid in stopped:
+                continue                          # aborted: stays pending, retries
             rec["no_handshake"] = False          # the hashline IS the handshake
             if bssid in cracked:
                 LootStore.mark_cracked(rec, cracked[bssid], attack["name"], now=now)
@@ -650,12 +710,15 @@ class CrackWorker:
         targets = targets_from_events(events)
         for target in targets:
             LootStore.upsert(aps, target, now=self._clock())
-        cracked = self._john_attack(targets, attack, conf, "manual") if targets else {}
+        cracked, stopped = self._john_attack(targets, attack, conf, "manual") \
+            if targets else ({}, set())
         now = self._clock()
         for target in targets:
             bssid = target["bssid"].upper()
             rec = aps.get(bssid)
             if rec is None:
+                continue
+            if bssid in stopped:
                 continue
             rec["no_handshake"] = False
             if bssid in cracked:
@@ -721,7 +784,8 @@ class CrackWorker:
             rule = rules[0] if isinstance(rules, (list, tuple)) and rules else None
             cmd = john_mod.build_crack_cmd(hashfile, wl, pot, rules=rule)
         if self._stream:
-            self._run_john_streaming(cmd, base, timeout)
+            self._run_john_streaming(cmd, base, timeout,
+                                     should_stop=self._should_stop)
         else:
             self._runner(cmd, timeout=timeout)
         _rc, out, _err = self._runner(john_mod.build_show_cmd(hashfile, pot), timeout=60)
@@ -730,7 +794,8 @@ class CrackWorker:
                 return password
         return None
 
-    def _run_john_streaming(self, cmd, base, timeout):  # pragma: no cover
+    def _run_john_streaming(self, cmd, base, timeout,
+                            should_stop=None):  # pragma: no cover
         """Run John, reading its ``--progress-every`` status lines and writing the
         live record. Cracks go to the potfile regardless; this is only the feed."""
         import select
@@ -744,6 +809,9 @@ class CrackWorker:
         try:
             while True:
                 if deadline and self._clock() > deadline:
+                    proc.kill()
+                    break
+                if should_stop and should_stop():   # operator aborted this job
                     proc.kill()
                     break
                 ready, _, _ = select.select([proc.stdout], [], [], 2.0)

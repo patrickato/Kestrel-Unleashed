@@ -434,19 +434,46 @@ def control_path(crack_dir):
 
 
 def read_control(crack_dir):
-    """The operator control state: ``{"paused": bool}``. Missing/corrupt = not
-    paused. Separate from the ``[crack] enabled`` config toggle (a hard off);
-    pause is a soft, operator-set hold the worker checks each loop."""
+    """The operator control state: ``{"paused": bool, "stop_seq": int}``.
+    Missing/corrupt = not paused, seq 0. Separate from the ``[crack] enabled``
+    config toggle (a hard off): ``paused`` is a soft hold the worker checks each
+    loop (the current job still finishes), and ``stop_seq`` is a monotonic
+    "abort the job running now" counter -- the worker records it at the start of
+    a job and kills the live cracker when it later reads a higher value."""
     data = _read_json(control_path(crack_dir), None)
     if not isinstance(data, dict):
-        return {"paused": False}
-    return {"paused": bool(data.get("paused", False))}
+        return {"paused": False, "stop_seq": 0}
+    try:
+        seq = int(data.get("stop_seq", 0) or 0)
+    except (TypeError, ValueError):
+        seq = 0
+    return {"paused": bool(data.get("paused", False)), "stop_seq": seq}
+
+
+def _write_control(crack_dir, paused, stop_seq):
+    os.makedirs(crack_dir, exist_ok=True)
+    _write_json_atomic(control_path(crack_dir),
+                       {"paused": bool(paused), "stop_seq": int(stop_seq)},
+                       world_readable=True)
 
 
 def set_paused(crack_dir, paused):
     """Pause or resume the worker. Written by the daemon/CLI (both pi); the
-    worker (also pi) reads it. Returns the new state."""
-    os.makedirs(crack_dir, exist_ok=True)
-    _write_json_atomic(control_path(crack_dir), {"paused": bool(paused)},
-                       world_readable=True)
+    worker (also pi) reads it. Preserves the stop counter. Returns the new
+    paused state."""
+    cur = read_control(crack_dir)
+    _write_control(crack_dir, bool(paused), cur["stop_seq"])
     return bool(paused)
+
+
+def request_stop(crack_dir):
+    """Ask the worker to abort the job running right now (distinct from pause,
+    which lets the current job finish). Bumps the monotonic ``stop_seq`` the
+    worker captures per job; it kills the live cracker when the counter has
+    advanced past the value it started with, and the next job -- which captures
+    the new value -- is unaffected. Preserves the paused state. Returns the new
+    counter."""
+    cur = read_control(crack_dir)
+    new_seq = cur["stop_seq"] + 1
+    _write_control(crack_dir, cur["paused"], new_seq)
+    return new_seq

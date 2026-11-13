@@ -679,6 +679,10 @@ def create_app(daemon):
             if which == "resume":
                 crack_store.set_paused(CRACK_DIR, False)
                 return _loot_redirect(ctl, "Crack worker resumed.")
+            if which == "stop":
+                crack_store.request_stop(CRACK_DIR)
+                return _loot_redirect(ctl, "Stopping the current crack job "
+                                      "(the network stays pending, not exhausted).")
             if which == "clear-queue":
                 n = crack_store.clear_queue(CRACK_DIR)
                 return _loot_redirect(ctl, "Cleared %d queued job(s)." % n)
@@ -2933,6 +2937,11 @@ def _crack_control_strip(crack, control):
     if ready and enabled:
         btns = [_crack_ctl_button(control, "resume", "Resume") if paused
                 else _crack_ctl_button(control, "pause", "Pause")]
+        if state == "cracking" and not paused:
+            # Abort the live job now (kills the running cracker), as opposed to
+            # Pause, which lets it finish first. The AP stays pending.
+            btns.append(_crack_ctl_button(control, "stop", "Stop current",
+                                          "danger"))
         if jobs:
             btns.append(_crack_ctl_button(control, "clear-queue",
                                           "Clear queue", "danger"))
