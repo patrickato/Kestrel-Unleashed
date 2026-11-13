@@ -824,6 +824,68 @@ def apply_clock_set(change):
     return {"ok": True, "clock_set": epoch}
 
 
+# A WPA passphrase is 8..63 printable chars, or exactly 64 hex (a raw PMK).
+_PSK_RE = re.compile(r"\A(?:[\x20-\x7e]{8,63}|[0-9A-Fa-f]{64})\Z")
+# A conservative SSID: 1..32 chars, no control chars, and not starting with '-'
+# (so nmcli never reads it as an option). SSIDs outside this are connected by hand.
+_SSID_RE = re.compile(r"\A(?!-)[^\x00-\x1f]{1,32}\Z")
+
+
+def apply_wifi_connect(change):
+    """Connect the station Wi-Fi to a cracked network, for a field uplink:
+
+      {"target": "wifi-connect", "ssid": str, "psk": str}
+
+    The built-in Wi-Fi is NetworkManager-managed (the capture dongle is in
+    monitor mode and unmanaged), so nmcli connects on it. Used from the loot page
+    to hop onto a network whose key was recovered -- an authorized-use action,
+    gated on web auth at the route and here. The PSK is passed as an argv item
+    (never a shell string) and never logged."""
+    ssid = change.get("ssid")
+    psk = change.get("psk")
+    if not isinstance(ssid, str) or not _SSID_RE.match(ssid):
+        return {"ok": False, "error": "invalid SSID"}
+    if not isinstance(psk, str) or not _PSK_RE.match(psk):
+        return {"ok": False, "error": "invalid Wi-Fi key"}
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/nmcli", "device", "wifi", "connect", ssid,
+             "password", psk],
+            capture_output=True, text=True, timeout=45, check=False,
+            stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "error": "could not run nmcli: %s" % exc}
+    if proc.returncode != 0:
+        # nmcli echoes the SSID in errors but never the key; still, keep it short.
+        return {"ok": False, "error": (proc.stderr or proc.stdout
+                                       or "connect failed").strip()[:200]}
+    sys.stderr.write("plugins-ctl apply: wifi-connect to a cracked network via web\n")
+    return {"ok": True, "wifi": "connected"}
+
+
+def apply_wifi_disconnect(change):
+    """Bring the cracked-network connection down again:
+
+      {"target": "wifi-disconnect", "ssid": str}
+
+    Brings down the NM connection named for the SSID (nmcli names the profile
+    after it), so NetworkManager autoconnects the management Wi-Fi again."""
+    ssid = change.get("ssid")
+    if not isinstance(ssid, str) or not _SSID_RE.match(ssid):
+        return {"ok": False, "error": "invalid SSID"}
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/nmcli", "connection", "down", "id", ssid],
+            capture_output=True, text=True, timeout=30, check=False,
+            stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "error": "could not run nmcli: %s" % exc}
+    if proc.returncode != 0:
+        return {"ok": False, "error": (proc.stderr or "disconnect failed").strip()[:200]}
+    sys.stderr.write("plugins-ctl apply: wifi-disconnect via web\n")
+    return {"ok": True, "wifi": "disconnected"}
+
+
 def apply_power(change):
     """Reboot or shut the device down:
 
@@ -1148,6 +1210,10 @@ def apply_change(change):
         return apply_backup(change, config)
     if change.get("target") == "remote-train":
         return apply_remote_train(change, config)
+    if change.get("target") == "wifi-connect":
+        return apply_wifi_connect(change)
+    if change.get("target") == "wifi-disconnect":
+        return apply_wifi_disconnect(change)
     name = change.get("plugin")
     if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", name):
         return {"ok": False, "error": "bad plugin name"}

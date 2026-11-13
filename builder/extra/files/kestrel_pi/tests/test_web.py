@@ -782,7 +782,9 @@ class _FakeCapture:
 class _FakeDaemon:
     def __init__(self, web_cfg, plugin_table, networks=None,
                  access_points=None, output_mode=None, crack=None,
-                 hashline_files=None, bssid_files=None, quality=None):
+                 hashline_files=None, bssid_files=None, quality=None,
+                 station=None):
+        self._station = station or (set(), None)
         import logging
         from kestrel_pi.loader import PluginRecord
 
@@ -804,6 +806,11 @@ class _FakeDaemon:
     def _fresh_config(self):
         return self.config
 
+    def station_scan(self):
+        # (visible SSIDs, connected SSID) for the loot connect controls; tests
+        # override via `station` on the constructor.
+        return getattr(self, "_station", (set(), None))
+
     def status(self):
         return dict(_status([r.health() for r in self.loader.records.values()]),
                     started=1.0)
@@ -821,7 +828,7 @@ def _basic(user="pi", password="hunter2"):
 
 def _client(monkeypatch, tmp_path, web_cfg, table=None, replies=None, networks=None,
             access_points=None, output_mode=None, crack=None, hashline_files=None,
-            bssid_files=None, quality=None):
+            bssid_files=None, quality=None, station=None):
     pytest.importorskip("flask")
     sent = []
 
@@ -840,7 +847,7 @@ def _client(monkeypatch, tmp_path, web_cfg, table=None, replies=None, networks=N
                          networks=networks, access_points=access_points,
                          output_mode=output_mode, crack=crack,
                          hashline_files=hashline_files, bssid_files=bssid_files,
-                         quality=quality)
+                         quality=quality, station=station)
     return web.create_app(daemon).test_client(), sent
 
 
@@ -3016,3 +3023,53 @@ def test_trust_localhost_lets_loopback_operate(monkeypatch, tmp_path):
 def test_without_trust_localhost_loopback_still_needs_auth(monkeypatch, tmp_path):
     client, _ = _client(monkeypatch, tmp_path, {"auth": "system"})
     assert client.get("/").status_code == 401
+
+
+# -- /loot connect-to-a-cracked-network -------------------------------------
+def _cracked_loot(crackdir):
+    from kestrel_pi.crack import store as crack_store
+    store = crack_store.LootStore(str(crackdir))
+    store.save({"AA:BB:CC:DD:EE:01": {
+        "bssid": "AA:BB:CC:DD:EE:01", "essid": "HomeNet", "status": "cracked",
+        "password": "letmein12345", "hashlines": 1}})
+
+
+def test_loot_connect_button_shown_when_in_range(monkeypatch, tmp_path):
+    crackdir = tmp_path / "crack"; crackdir.mkdir()
+    monkeypatch.setattr(web, "CRACK_DIR", str(crackdir))
+    _cracked_loot(crackdir)
+    client, sent = _client(monkeypatch, tmp_path, BASIC,
+                           station=({"HomeNet"}, None))
+    page = client.get("/loot", headers=_basic()).get_data(as_text=True)
+    assert 'name="connect" value="AA:BB:CC:DD:EE:01"' in page
+    resp = client.post("/loot", headers=_basic(),
+                       data={"csrf": _csrf(page),
+                             "connect": "AA:BB:CC:DD:EE:01"},
+                       follow_redirects=False)
+    assert resp.status_code == 303
+    assert {"target": "wifi-connect", "ssid": "HomeNet",
+            "psk": "letmein12345"} in sent
+
+
+def test_loot_connect_greyed_when_out_of_range(monkeypatch, tmp_path):
+    crackdir = tmp_path / "crack"; crackdir.mkdir()
+    monkeypatch.setattr(web, "CRACK_DIR", str(crackdir))
+    _cracked_loot(crackdir)
+    client, _ = _client(monkeypatch, tmp_path, BASIC, station=(set(), None))
+    page = client.get("/loot", headers=_basic()).get_data(as_text=True)
+    assert 'name="connect"' not in page          # no connect button
+    assert "out of range" in page
+
+
+def test_loot_disconnect_when_connected(monkeypatch, tmp_path):
+    crackdir = tmp_path / "crack"; crackdir.mkdir()
+    monkeypatch.setattr(web, "CRACK_DIR", str(crackdir))
+    _cracked_loot(crackdir)
+    client, sent = _client(monkeypatch, tmp_path, BASIC,
+                           station=({"HomeNet"}, "HomeNet"))
+    page = client.get("/loot", headers=_basic()).get_data(as_text=True)
+    assert 'name="disconnect" value="AA:BB:CC:DD:EE:01"' in page
+    client.post("/loot", headers=_basic(),
+                data={"csrf": _csrf(page), "disconnect": "AA:BB:CC:DD:EE:01"},
+                follow_redirects=False)
+    assert {"target": "wifi-disconnect", "ssid": "HomeNet"} in sent

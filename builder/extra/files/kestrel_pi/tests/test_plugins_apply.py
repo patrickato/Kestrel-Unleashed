@@ -1219,3 +1219,42 @@ def test_clock_set_via_dispatcher(monkeypatch):
                             returncode=0, stdout="", stderr=""))
     reply = ctl.apply_change({"target": "clock-set", "epoch": _GOOD_EPOCH})
     assert reply["ok"] is True and reply["clock_set"] == _GOOD_EPOCH
+
+
+# -- connect-to-a-cracked-network (station Wi-Fi via nmcli) ------------------
+def test_wifi_connect_validates_ssid_and_psk():
+    assert ctl.apply_wifi_connect({"ssid": "", "psk": "goodpass1"})["ok"] is False
+    assert ctl.apply_wifi_connect({"ssid": "-x", "psk": "goodpass1"})["ok"] is False
+    assert ctl.apply_wifi_connect({"ssid": "Net", "psk": "short"})["ok"] is False
+    assert ctl.apply_wifi_connect({"ssid": "N" * 33, "psk": "goodpass1"})["ok"] is False
+
+
+def test_wifi_connect_runs_nmcli(monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        return _types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ctl.subprocess, "run", fake_run)
+    reply = ctl.apply_wifi_connect({"ssid": "HomeNet", "psk": "letmein12345"})
+    assert reply["ok"] is True and reply["wifi"] == "connected"
+    assert seen["argv"][:5] == ["/usr/bin/nmcli", "device", "wifi", "connect", "HomeNet"]
+    assert "letmein12345" in seen["argv"]      # psk passed as an argv item, not a shell string
+
+
+def test_wifi_disconnect_runs_nmcli(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(ctl.subprocess, "run",
+                        lambda argv, **k: seen.update(argv=argv) or _types.SimpleNamespace(
+                            returncode=0, stdout="", stderr=""))
+    reply = ctl.apply_wifi_disconnect({"ssid": "HomeNet"})
+    assert reply["ok"] is True and reply["wifi"] == "disconnected"
+    assert seen["argv"] == ["/usr/bin/nmcli", "connection", "down", "id", "HomeNet"]
+
+
+def test_wifi_connect_via_dispatcher_needs_web_auth(env):
+    # It is a real control (uses a recovered key), so it stays gated on web auth.
+    cs.set_value(str(env / "config.toml"), "web", "auth", '"none"')
+    reply = ctl.apply_change({"target": "wifi-connect", "ssid": "N", "psk": "x" * 10})
+    assert reply["ok"] is False and "web auth" in reply["error"]

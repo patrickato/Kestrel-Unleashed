@@ -661,6 +661,37 @@ def create_app(daemon):
         if not _same(request.form.get("csrf") or "", csrf_token):
             return _loot_redirect(ctl, "This page is out of date (the daemon "
                                   "restarted); try again.", err=True)
+
+        # Connect / disconnect the station Wi-Fi to a cracked network (the loot
+        # table's Connect control, for a field uplink when the phone dies). The
+        # key comes from the loot store; NetworkManager is driven as root through
+        # the apply socket, which validates the SSID/key.
+        connect_bssid = (request.form.get("connect") or "").strip().upper()
+        disconnect_bssid = (request.form.get("disconnect") or "").strip().upper()
+        if connect_bssid or disconnect_bssid:
+            target = connect_bssid or disconnect_bssid
+            if not _WPS_MAC_RE.match(target):
+                return _loot_redirect(ctl, "Not a valid BSSID.", err=True)
+            rec = crack_store.LootStore(CRACK_DIR).load().get(target)
+            if rec is None or rec.get("status") != "cracked":
+                return _loot_redirect(ctl, "That network isn't cracked.", err=True)
+            essid = rec.get("essid") or ""
+            if not essid:
+                return _loot_redirect(ctl, "That network's name is hidden; "
+                                      "connect to it manually.", err=True)
+            if disconnect_bssid:
+                reply = apply_change({"target": "wifi-disconnect", "ssid": essid})
+                done = "Disconnected from %s." % essid
+            else:
+                reply = apply_change({"target": "wifi-connect", "ssid": essid,
+                                      "psk": rec.get("password") or ""})
+                done = ("Connected to %s. (If this was your management link, "
+                        "reconnect there to keep using the dashboard.)" % essid)
+            if reply.get("ok"):
+                return _loot_redirect(ctl, done)
+            return _loot_redirect(ctl, reply.get("error")
+                                  or "Wi-Fi change failed.", err=True)
+
         cfg = daemon._fresh_config()
         crack_cfg = cfg.get("crack") or {}
         wdir = crack_cfg.get("wordlists_dir") or CRACK_DEFAULTS["wordlists_dir"]
@@ -2710,6 +2741,17 @@ def _loot_nav(crack, control):
     )
 
 
+def _connect_state(essid, visible, connected):
+    """The loot connect control's state for a cracked AP: ``connected`` (the
+    station Wi-Fi is on it now), ``connectable`` (its ESSID is in range), or
+    ``out-of-range``. A hidden/empty ESSID can't be joined by name."""
+    if not essid:
+        return "out-of-range"
+    if connected and connected == essid:
+        return "connected"
+    return "connectable" if essid in (visible or ()) else "out-of-range"
+
+
 def _render_loot(daemon, control=None, message=None, error=False):
     """The Loot page, reached from the dashboard's "Loot" nav card: the recovered
     passwords (in cleartext) for every captured AP, the crack worker's live
@@ -2741,6 +2783,14 @@ def _render_loot(daemon, control=None, message=None, error=False):
     have_defaults = os.path.isfile(os.path.join(wdir, crack_suggest.DEFAULTS_LIST))
     rows_in = sorted(aps.values(), key=lambda r: (
         r.get("status") != "cracked", (r.get("essid") or "").lower()))
+    # For the connect-to-a-cracked-network control: which cracked ESSIDs the
+    # station Wi-Fi can see right now, and which it is already on. Scanned once
+    # (cached); an empty result just greys every control as out of range.
+    try:
+        _visible, _connected = daemon.station_scan()
+    except Exception:  # noqa: BLE001 -- the scan must never break the loot page
+        _visible, _connected = set(), None
+    ready = bool(control and control.get("ready"))
     trows = []
     for r in rows_in:
         st = r.get("status", "pending")
@@ -2787,6 +2837,34 @@ def _render_loot(daemon, control=None, message=None, error=False):
                     + '">Run: ' + _esc(runnable[0]["label"]) + "</button></form>")
             else:
                 sug_cell = '<span class="smeta">' + _esc(lbl) + "</span>"
+        # Connect-to-a-cracked-network: a per-AP control, meaningful only for a
+        # cracked AP (we have its key). Off by default -- nothing connects until
+        # the operator taps it; greyed when the network is out of range, and only
+        # shown as a button with web controls on (it uses a recovered key).
+        conn_cell = '<span class="smeta">—</span>'
+        bssid = r.get("bssid") or ""
+        if st == "cracked" and essid:
+            state = _connect_state(essid, _visible, _connected)
+            if not (ready and bssid):
+                _label = {"connected": "connected", "connectable": "in range",
+                          "out-of-range": "out of range"}[state]
+                conn_cell = '<span class="smeta">' + _label + "</span>"
+            elif state == "connected":
+                conn_cell = (
+                    '<form class="inline" method="post" action="'
+                    + _esc(_url("/loot", control)) + '">' + _csrf_field(control)
+                    + '<input type="hidden" name="disconnect" value="'
+                    + _esc(bssid) + '"><span class="pill p-cracked">on this</span> '
+                    + '<button type="submit">Disconnect</button></form>')
+            elif state == "connectable":
+                conn_cell = (
+                    '<form class="inline" method="post" action="'
+                    + _esc(_url("/loot", control)) + '">' + _csrf_field(control)
+                    + '<input type="hidden" name="connect" value="'
+                    + _esc(bssid) + '"><button type="submit" title="Join '
+                    + _esc(essid) + ' with the recovered key">Connect</button></form>')
+            else:
+                conn_cell = '<span class="pill p-pending">out of range</span>'
         trows.append(
             '<tr><td data-label="status">' + badge + "</td>"
             '<td data-label="network">' + name + "</td>"
@@ -2794,17 +2872,18 @@ def _render_loot(daemon, control=None, message=None, error=False):
             '<td data-label="device">' + _esc(r.get("device") or "") + "</td>"
             '<td data-label="suggested">' + sug_cell + "</td>"
             '<td data-label="password">' + pw + "</td>"
-            '<td data-label="handshakes">' + _esc(r.get("hashlines", 0))
-            + "</td></tr>")
+            '<td data-label="handshakes">' + _esc(r.get("hashlines", 0)) + "</td>"
+            '<td data-label="connect">' + conn_cell + "</td></tr>")
     body_rows = "".join(trows) or (
-        "<tr><td colspan='7'>no loot yet (nothing captured or cracked)</td></tr>")
+        "<tr><td colspan='8'>no loot yet (nothing captured or cracked)</td></tr>")
     note = ('<p class="smeta">Passwords are shown in cleartext. Suggested = the '
             "best attack for that device type (also `kestrel crack suggest`). "
             + ("%d network(s)." % len(rows_in) if rows_in else "") + "</p>")
     table = ("<h2>Loot</h2>" + note
              + "<div class='wrap'><table><thead><tr><th>status</th>"
              "<th>network</th><th>bssid</th><th>device</th><th>suggested</th>"
-             "<th>password</th><th>handshakes</th></tr></thead><tbody>" + body_rows
+             "<th>password</th><th>handshakes</th><th>connect</th>"
+             "</tr></thead><tbody>" + body_rows
              + "</tbody></table></div>")
 
     form = _loot_crack_form(daemon, control)

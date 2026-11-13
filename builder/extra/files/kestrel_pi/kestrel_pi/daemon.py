@@ -60,6 +60,8 @@ _SERVICE_STATE_TTL = 2.0
 # Radio inventory changes only on hotplug; cache it so status() (polled by the
 # dashboard) doesn't spawn `iw` on every request.
 _RADIOS_TTL = 20.0
+# Station Wi-Fi scan cache (visible SSIDs for the loot connect controls).
+_STATION_TTL = 20.0
 # After a capture toggle the dashboard re-renders straight away, but the cache
 # above can still hold the pre-change state, and `capture enable` starts the
 # service with --no-block, so it may not be up yet. The toggle re-probes for up
@@ -172,6 +174,10 @@ class Daemon:
         # rare and `iw` is a subprocess; see _radios_state).
         self._radios_cache = None     # (expiry, radios_list, assignment)
         self._radios_lock = threading.Lock()
+        # Station Wi-Fi scan (visible SSIDs + the connected one), for the loot
+        # page's connect-to-a-cracked-network controls. Cached; nmcli read only.
+        self._station_cache = None    # (expiry, visible_set, connected_or_None)
+        self._station_lock = threading.Lock()
         self.services = ServiceRegistry(self.log)
         # Expose the learning agent's published readout as a service so a UI
         # plugin (the e-ink face) can react to agent state without importing the
@@ -535,6 +541,45 @@ class Daemon:
         with self._radios_lock:
             self._radios_cache = (now + _RADIOS_TTL, radios_list, assignment)
         return radios_list, assignment
+
+    @staticmethod
+    def _nmcli_unescape(value):
+        """Undo nmcli's terse-mode escaping (``\\:`` and ``\\\\``)."""
+        return value.replace("\\:", ":").replace("\\\\", "\\")
+
+    def station_scan(self):
+        """``(visible_ssids, connected_ssid)`` for the station (built-in) Wi-Fi:
+        the SSIDs it currently sees and the one it is connected to (or None).
+        Powers the loot page's connect-to-a-cracked-network controls. Cached with
+        a short TTL; nmcli reads need no privilege, and any failure (no nmcli, no
+        managed Wi-Fi) is an empty, harmless result."""
+        now = time.monotonic()
+        with self._station_lock:
+            cached = self._station_cache
+            if cached and cached[0] > now:
+                return cached[1], cached[2]
+        visible, connected = set(), None
+        try:
+            out = subprocess.run(
+                ["nmcli", "-t", "-f", "ACTIVE,SSID", "device", "wifi", "list",
+                 "--rescan", "no"],
+                capture_output=True, text=True, timeout=10, check=False)
+            for line in (out.stdout or "").splitlines():
+                # terse rows are "ACTIVE:SSID" with ':' inside a field escaped \:
+                parts = line.split(":", 1)
+                if len(parts) != 2:
+                    continue
+                active, ssid = parts[0], self._nmcli_unescape(parts[1]).strip()
+                if not ssid:
+                    continue
+                visible.add(ssid)
+                if active == "yes":
+                    connected = ssid
+        except (OSError, subprocess.SubprocessError):
+            visible, connected = set(), None
+        with self._station_lock:
+            self._station_cache = (now + _STATION_TTL, visible, connected)
+        return visible, connected
 
     def _wait_service_state(self, service, running, timeout=None):
         """Drop the cached state (it may predate the change), then re-probe
