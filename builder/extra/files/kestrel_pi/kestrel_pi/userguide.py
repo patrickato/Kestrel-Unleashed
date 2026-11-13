@@ -372,6 +372,20 @@ kestrel wps list                           # what WPS has recovered
 
 If an attack says "no key recovered", the AP is most likely WPS-locked (the scan's `Lck` column said `Yes`) or simply not vulnerable — move on rather than hammering it. `--channel N` (from the scan) speeds up association; `--no-pixie` switches to the slow PIN brute force only when Pixie-Dust fails and the AP isn't locked.
 
+## Deauthentication
+
+**Lab / authorized use only — this transmits.** Deauth knocks a client off an access point so it reconnects, which makes the AP and client replay the 4-way handshake for a capturing radio to catch. It is the most direct "transmit" attack, so it asks the authorized-use acknowledgment first and **refuses any AP on the capture whitelist** (the never-attack list) — remove a network from the whitelist before you can deauth it.
+
+It uses the radio that owns the **attack** role (see the Radios card / `kestrel radios`): with two monitor-capable adapters it runs on the second one and capture keeps going on the first; with only one adapter it shares the capture radio and **pauses capture** for the burst, then resumes. There is no always-on service — it sends a short burst and stops.
+
+```bash
+sudo kestrel deauth AA:BB:CC:DD:EE:FF                     # a short deauth burst at the AP
+sudo kestrel deauth AA:BB:CC:DD:EE:FF --client 11:22:33:44:55:66   # just one client
+sudo kestrel deauth AA:BB:CC:DD:EE:FF --channel 6 --count 16       # pin the channel, longer burst
+```
+
+`--count 0` transmits continuously until you stop it (Ctrl-C); the default is a short burst. `--channel` (the AP's channel) avoids a scan and lands the frames faster.
+
 ---
 
 ## Evil-portal
