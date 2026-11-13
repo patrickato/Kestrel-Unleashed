@@ -33,4 +33,9 @@ kestrel-evilportal = "kestrel_pi.evilportal:main"
 
 [tool.setuptools.packages.find]
 include = ["kestrel_pi*"]
+
+[tool.setuptools.package-data]
+# The IEEE OUI vendor table (data/oui.txt.gz), shipped inside the package so the
+# app-layer update/dev-sync carries it with the code.
+kestrel_pi = ["data/*.gz"]
 exclude = ["tests*"]

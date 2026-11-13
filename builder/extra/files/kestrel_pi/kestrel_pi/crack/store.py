@@ -141,6 +141,7 @@ class LootStore:
         rec["device"] = device_id.label(bssid=bssid, essid=essid)
         rec["category"] = ident["category"]
         rec["product"] = ident["product"]
+        rec["vendor"] = ident.get("vendor", "")
         return rec
 
     @staticmethod

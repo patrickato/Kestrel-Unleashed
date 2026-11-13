@@ -145,6 +145,15 @@ def identify(bssid: str = "", essid: str = "", vendor: str = "") -> dict:
     ESSID still classifies most named devices."""
     reasons: List[str] = []
 
+    # Fill the vendor from the BSSID's OUI when the caller didn't supply one, so
+    # "who makes it" works everywhere (even for a device whose SSID says nothing).
+    if not vendor and bssid:
+        try:
+            from . import oui as _oui
+            vendor = _oui.vendor(bssid)
+        except Exception:  # noqa: BLE001 - a missing OUI table must not break ID
+            vendor = ""
+
     name = _match_name(essid)
     if name is not None:
         category, product, conf = name
