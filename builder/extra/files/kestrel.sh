@@ -88,6 +88,9 @@ Usage: $PROG <command>
   crack pause        Soft-pause the worker (finishes the current job, then holds)
   crack resume       Resume after a pause
   crack stop         Abort the job running right now (the AP stays pending)
+  crack tune [--rules NAME|off] [--prune]
+                     One-shot: pin John, set the rule (default off=raw), report
+                     wordlists and flag/prune any too big for the Pi
   crack queue        Show the pending manual-job queue
   crack clear-queue  Remove all pending queued jobs (current job unaffected)
   crack clear --yes  Clear the loot store (captures and wordlists untouched)
@@ -2135,10 +2138,11 @@ cmd_crack() {
         pause) cmd_crack_pause ;;
         resume) cmd_crack_resume ;;
         stop) cmd_crack_stop ;;
+        tune) cmd_crack_tune "$@" ;;
         queue) cmd_crack_queue ;;
         clear-queue) cmd_crack_clear_queue ;;
         clear) cmd_crack_clear "$@" ;;
-        *) die "unknown 'crack' subcommand: $sub (status|watch|list|show|suggest|groups|all|wordlists|run|kit|ingest|enable|disable|pause|resume|stop|queue|clear-queue|clear)" ;;
+        *) die "unknown 'crack' subcommand: $sub (status|watch|list|show|suggest|groups|all|wordlists|run|kit|ingest|enable|disable|pause|resume|stop|tune|queue|clear-queue|clear)" ;;
     esac
 }
 
@@ -2161,6 +2165,108 @@ cmd_crack_resume() {
 cmd_crack_stop() {
     run_as_pi "$PWN_VENV_PYTHON" -I -c 'from kestrel_pi.crack import store, CRACK_DIR; store.request_stop(CRACK_DIR)'
     log "asked the crack worker to stop the current job (it stays pending, not exhausted)"
+}
+
+# One-shot: put the on-device cracker in the "fast, raw, broad" Pi profile --
+# pin the John engine (multi-salt; the right primary), set the rule (off by
+# default, since rule passes belong on the GPU), report the wordlists with
+# per-network time estimates and flag any too big for the Pi, and with --prune
+# move those into an offload/ holding pen (reversible, out of the auto-loop).
+# Arming a rule also re-arms the backlog so it actually runs against already-
+# tried networks (the rule isn't part of the tried-signature).
+cmd_crack_tune() {
+    local rules_arg="off" do_prune=no max_min=15
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --rules) rules_arg=$2; shift 2 ;;
+            --prune) do_prune=yes; shift ;;
+            --max-min) max_min=$2; shift 2 ;;
+            -h|--help)
+                echo "usage: $PROG crack tune [--rules NAME|off] [--prune] [--max-min N]"
+                echo "  pins John, sets the rule (default off = raw wordlists),"
+                echo "  reports wordlists and flags any slower than N min/net (default 15);"
+                echo "  --prune moves the flagged lists to an offload/ holding pen."
+                return 0 ;;
+            --*) die "unknown option for 'crack tune': $1" ;;
+            *) die "unexpected argument for 'crack tune': $1" ;;
+        esac
+    done
+    need_root
+    local wd rearm=no
+    wd=$(cfg crack.wordlists_dir "$PWN_WORDLISTS_DIR")
+
+    # 1. engine -> John (never pin a broken engine)
+    if command -v john >/dev/null 2>&1; then
+        config_set crack engine '"john"'
+        log "engine pinned to John"
+    else
+        die "John is not installed (command -v john found nothing); fix John before tuning"
+    fi
+
+    # 2. rule
+    case "$rules_arg" in
+        off|none|raw|"")
+            config_set crack rules '[]'
+            log "rules: off (raw wordlists -- rule passes belong on the GPU)" ;;
+        *)
+            if [ -f "$wd/$rules_arg" ] || [ -f "/usr/share/hashcat/rules/$rules_arg" ]; then
+                config_set crack rules "[\"$rules_arg\"]"
+                rearm=yes
+                log "rules: $rules_arg armed"
+            else
+                die "rule not found: $rules_arg (looked in $wd and /usr/share/hashcat/rules)"
+            fi ;;
+    esac
+
+    # 3. report wordlists (+ optional prune), as pi (it owns the dir)
+    echo "Wordlists in $wd:"
+    WD="$wd" MAXMIN="$max_min" PRUNE="$do_prune" run_as_pi "$PWN_VENV_PYTHON" -I -c '
+import os, sys, shutil
+wd = os.environ["WD"]; max_min = float(os.environ["MAXMIN"]); prune = os.environ["PRUNE"] == "yes"
+GPS = 1500.0
+dest = os.path.join(wd, "offload")
+rows = []
+for name in sorted(os.listdir(wd)):
+    p = os.path.join(wd, name)
+    if not os.path.isfile(p) or name.endswith(".rule"):
+        continue
+    size = os.path.getsize(p)
+    words = max(1, size // 10)        # ~9-10 bytes per candidate incl. newline
+    mins = words / GPS / 60.0
+    rows.append([name, size, mins, mins > max_min])
+if not rows:
+    print("  (no wordlists installed)"); raise SystemExit(0)
+def human_size(b):
+    kb = b / 1024.0
+    return ("%.0f KB" % kb) if kb < 1024 else ("%.1f MB" % (kb / 1024.0))
+def human_time(m):
+    return ("%.0f sec" % (m * 60)) if m < 1 else ("%.1f min" % m) if m < 60 else ("%.1f hr" % (m / 60.0))
+moved = []
+for name, size, mins, big in rows:
+    flag = "  <- too big for the Pi; offload to GPU" if big else ""
+    print("  %-34s %9s %11s/net%s" % (name, human_size(size), human_time(mins), flag))
+    if big and prune:
+        os.makedirs(dest, exist_ok=True)
+        shutil.move(os.path.join(wd, name), os.path.join(dest, name))
+        moved.append(name)
+if prune and moved:
+    print()
+    print("  moved %d oversized list(s) to %s (out of the auto-loop -- send them to the GPU):" % (len(moved), dest))
+    for m in moved:
+        print("    " + m)
+elif any(r[3] for r in rows) and not prune:
+    print()
+    print("  re-run with --prune to move the flagged list(s) into an offload/ holding pen")
+' || die "could not scan the wordlists"
+
+    # 4. re-arm the backlog when a rule was newly armed (the rule is not part of
+    # the tried-signature, so already-tried nets would otherwise skip it)
+    if [ "$rearm" = yes ]; then
+        find "$wd" -maxdepth 1 -type f ! -name '*.rule' -exec touch {} + 2>/dev/null || true
+        log "re-armed the backlog so '$rules_arg' runs against already-tried networks"
+    fi
+    [ "$(cfg crack.enabled false)" = true ] || log "note: quick-crack is off; run 'sudo $PROG crack enable' to start churning"
+    log "tuned for the Pi: John engine, rules=$([ "$rearm" = yes ] && echo "$rules_arg" || echo off)"
 }
 
 # Show the pending manual-job queue (what is lined up, oldest first).

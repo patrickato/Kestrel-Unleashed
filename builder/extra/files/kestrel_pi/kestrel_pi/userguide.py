@@ -316,6 +316,7 @@ kestrel crack queue                  # what manual jobs are lined up
 kestrel crack pause                  # soft-pause the worker (finishes the current job, then holds)
 kestrel crack resume                 # resume after a pause
 kestrel crack stop                   # abort the job running right now (the AP stays pending)
+sudo kestrel crack tune              # one-shot: pin John, raw wordlists, flag/prune oversized lists
 kestrel crack clear-queue            # drop all pending queued jobs
 sudo kestrel crack disable           # turn auto-cracking off (and enable to turn back on)
 ```
@@ -876,6 +877,7 @@ This is the same mechanism as the first-boot Wi-Fi staging, and it works at any 
 | `kestrel crack enable` / `disable` | Turn on-device cracking on or off (hard). |
 | `kestrel crack pause` / `resume` | Soft-pause the worker (current job finishes) / resume. |
 | `kestrel crack stop` | Abort the job running right now (kills the live cracker; the AP stays pending, not exhausted). |
+| `kestrel crack tune [--rules NAME\|off] [--prune]` | One-shot: pin the John engine, set the rule (default off = raw), report wordlists with per-net time estimates, and flag (or `--prune` aside) any too big for the Pi. Arming a rule also re-arms the backlog. |
 | `kestrel crack queue` / `clear-queue` | Show the pending job queue / drop all pending jobs. |
 | `kestrel crack clear --yes` | Clear the loot store (captures and wordlists untouched). |
 

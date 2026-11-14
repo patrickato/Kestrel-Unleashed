@@ -731,6 +731,21 @@ Touched: `crack/store.py`, `crack/controller.py`, tests, `deferred.md` (entry
 removed), changelog. Release impact: **app-layer-safe** — the package only; no
 new deps/units/config. Tests: +3; 1243 pass, 12 skipped, lint clean.
 
+### Added: `kestrel crack tune` — one-shot Pi crack profile
+A single command to put the on-device cracker in the "fast, raw, broad" Pi
+profile without remembering the pieces (engine, rules, the re-arm gotcha):
+
+- Pins `engine = "john"` (refuses if John isn't installed — never pins a broken
+  engine), sets `rules = []` (raw; `--rules NAME` arms one instead).
+- Reports every wordlist with its size and estimated time/net (~1,500 g/s) and
+  flags any too slow for the Pi (`--max-min N`, default 15); `--prune` moves the
+  flagged lists into a reversible `wordlists/offload/` holding pen (out of the
+  auto-loop — `discover()` is flat, so the subdir is ignored).
+- When a rule is armed, re-arms the backlog (`touch` the lists) so it actually
+  runs against already-tried networks — the rule isn't part of the tried-signature.
+
+`kestrel.sh` only (CLI). Release impact: **app-layer-safe**. shellcheck clean.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,
