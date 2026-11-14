@@ -67,6 +67,11 @@ def test_parse_reaver_progress_stages():
     # the latest line wins when reaver advances through pins
     assert wps.parse_reaver_progress("[+] 1.00% complete\n[+] 9.90% complete")[
         "percent"] == 9.9
+    # an AP that NACKs every PIN is flagged so the UI can call the target futile
+    nack = wps.parse_reaver_progress(
+        "[+] Trying pin \"12345670\"\n[+] Received WSC NACK")
+    assert nack.get("nacking") is True
+    assert "nacking" not in wps.parse_reaver_progress("[+] 9.90% complete")
 
 
 def test_progress_last_line_scrubs_secrets():

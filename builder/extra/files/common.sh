@@ -76,6 +76,12 @@ PWN_KIOSK_SERVICE=kestrel-kiosk.service
 # operator's portal templates live under the evil-portal dir.
 PWN_EVIL_PORTAL_DIR=${PWN_EVIL_PORTAL_DIR:-$PWN_STATE_DIR/evil-portal}
 PWN_EVIL_PORTAL_SERVICE=kestrel-evil-portal.service
+# Operator-defined portal profiles (each a dir with index.html, optional
+# done.html and a `meta` of ssid/channel). The active one is named by
+# `[evil-portal] profile`; the launcher serves its dir. The shipped neutral
+# defaults seed a new profile and are the fallback when no profile is active.
+PWN_EVIL_PORTAL_PROFILES_DIR=${PWN_EVIL_PORTAL_PROFILES_DIR:-/etc/kestrel/evil-portal/profiles}
+PWN_EVIL_PORTAL_SHARE=${PWN_EVIL_PORTAL_SHARE:-/usr/local/share/kestrel/evil-portal/templates}
 
 # WPS (Kestrel-Unleashed): the web page drives scan/attack in the background and
 # reads live state from here -- `state` (idle|scanning|attacking <bssid>) and

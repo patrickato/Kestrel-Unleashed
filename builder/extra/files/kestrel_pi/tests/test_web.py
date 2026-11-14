@@ -1059,6 +1059,51 @@ def test_wps_attack_stale_progress_keeps_detail(monkeypatch, tmp_path):
     assert "reaver is working" not in body                 # no bare fallback
 
 
+def test_wps_attack_locked_and_stuck_is_called_futile(monkeypatch, tmp_path):
+    # A locked AP stuck near 0% for over a minute is a dead end: say so plainly
+    # and point at the handshake-crack path, not a hopeful "still trying".
+    _wps_attacking(monkeypatch, tmp_path, {
+        "bssid": "AA:BB:CC:DD:EE:FF", "stage": "rate-limited", "percent": 0.0,
+        "locked": True, "started_at": time.time() - 3600, "done": False,
+        "updated_at": time.time()})
+    client, _ = _client(monkeypatch, tmp_path, BASIC)
+    body = client.get("/wps", headers=_basic()).get_data(as_text=True)
+    assert "resisting" in body and "WPS won" in body          # the futile verdict
+    assert "capture its 4-way handshake" in body and 'href="/loot"' in body
+    assert "reaver is" not in body                            # not the hopeful line
+
+
+def test_wps_attack_nacking_every_pin_is_called_futile(monkeypatch, tmp_path):
+    # No "locked" keyword, but the AP NACKs every PIN and hasn't moved in minutes.
+    _wps_attacking(monkeypatch, tmp_path, {
+        "bssid": "AA:BB:CC:DD:EE:FF", "stage": "pin-brute", "percent": 0.0,
+        "nacking": True, "started_at": time.time() - 600, "done": False,
+        "updated_at": time.time()})
+    client, _ = _client(monkeypatch, tmp_path, BASIC)
+    body = client.get("/wps", headers=_basic()).get_data(as_text=True)
+    assert "resisting" in body and "WSC NACK" in body
+    assert "quick-crack" in body
+
+
+def test_wps_scan_table_flags_locked_targets_and_orders_them_last(monkeypatch,
+                                                                  tmp_path):
+    scan = tmp_path / "scan.txt"
+    scan.write_text(
+        "BSSID               Ch  dBm  WPS  Lck  ESSID\n"
+        "11:11:11:11:11:11    6  -40  2.0  Yes  LockedNet\n"
+        "22:22:22:22:22:22   11  -55  1.0  No   OpenWps\n")
+    monkeypatch.setattr(web, "WPS_SCAN_FILE", str(scan))
+    rows = web._wps_scan_rows()
+    # unlocked target sorts first; lock state parsed off the fixed column
+    assert [r["bssid"] for r in rows] == ["22:22:22:22:22:22", "11:11:11:11:11:11"]
+    assert rows[0]["locked"] is False and rows[1]["locked"] is True
+    client, _ = _client(monkeypatch, tmp_path, BASIC)
+    body = client.get("/wps", headers=_basic()).get_data(as_text=True)
+    assert "locked — poor target" in body and "unlocked — try it" in body
+    # the page is honest that WPS is a shortcut, not the main attack
+    assert "shortcut" in body and "capturing its handshake" in body
+
+
 def test_wps_attack_done_shows_outcome(monkeypatch, tmp_path):
     _wps_attacking(monkeypatch, tmp_path, {
         "bssid": "AA:BB:CC:DD:EE:FF", "stage": "recovered", "done": True,
@@ -3061,6 +3106,53 @@ def test_loot_page_shows_cleartext_and_batch_crack_enqueues(monkeypatch, tmp_pat
     assert len(jobs) == 1
     assert jobs[0][1]["wordlist"].endswith("small.txt")
     assert jobs[0][1]["files"] == [str(capfile)]
+
+
+def test_loot_crack_box_self_updates_via_live_fragment(monkeypatch, tmp_path):
+    # The Quick-crack box must advance on its own: the page wraps it in #crackbox
+    # and wires a poller at /loot/crack-live, and that endpoint returns the same
+    # live readout fragment (not a whole page) so the forms below it survive.
+    pytest.importorskip("flask")
+    crack_dir = tmp_path / "crack"; crack_dir.mkdir()
+    wl_dir = tmp_path / "wl"; wl_dir.mkdir()
+    (wl_dir / "small.txt").write_text("hunter2\n")
+    cap_dir = tmp_path / "cap"; cap_dir.mkdir()
+    capfile = cap_dir / "HomeWiFi.hc22000"
+    capfile.write_text("WPA*02*" + "a" * 32
+                       + "*001122334455*665544332211*486f6d65*00*00\n")
+    (crack_dir / "loot.json").write_text("{}")
+    monkeypatch.setattr(web, "CRACK_DIR", str(crack_dir))
+    monkeypatch.setattr(web, "iface_ipv4", lambda i: None)
+
+    daemon = _loot_daemon(tmp_path, wl_dir, cap_dir, capfile)
+    # Make the worker look busy so the readout carries a live value to show.
+    def _busy_status():
+        return {
+            "crack": {"enabled": True, "service": "running",
+                      "status": {"state": "cracking", "cracked": 0, "targets": 1,
+                                 "pending": 1, "exhausted": 0, "wordlists": 1,
+                                 "queue": 0, "current": {"essid": "HomeWiFi",
+                                                         "wordlist": "small.txt"}}},
+            "widgets": {web.CRACK_CARD_NAME: [
+                {"name": "trying", "label": "Trying", "value": "00001111",
+                 "kind": "text"}]},
+            "capture": {"networks": 0, "access_points": 0}, "started": 1.0}
+    daemon.status = _busy_status
+    client = web.create_app(daemon).test_client()
+
+    page = client.get("/loot", headers=_basic()).get_data(as_text=True)
+    assert 'id="crackbox"' in page                       # the live region wrapper
+    assert "/loot/crack-live" in page                    # the poller target
+    assert "Now cracking" in page and "HomeWiFi" in page
+
+    frag = client.get("/loot/crack-live", headers=_basic())
+    assert frag.status_code == 200
+    text = frag.get_data(as_text=True)
+    # A fragment, not a full page: carries the live readout, no <html>/<body>.
+    assert "00001111" in text and "Crack worker" in text
+    assert "<html" not in text.lower() and "<body" not in text.lower()
+    # The forms below the box are NOT in the fragment, so a poll can't wipe them.
+    assert "Crack more" not in text
 
 
 def test_loot_gpu_offload_section_download_and_ingest(monkeypatch, tmp_path):

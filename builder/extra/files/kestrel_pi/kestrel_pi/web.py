@@ -646,6 +646,14 @@ def create_app(daemon):
                                  or request.args.get("msg"),
                                  error=bool(request.args.get("err"))))
 
+    @app.get("/loot/crack-live")
+    def loot_crack_live():  # noqa: ANN202
+        # The live crack region on its own, polled by the Loot page so the
+        # Quick-crack readout advances without a full reload. Auth rides the
+        # before_request gate; the fragment is the same HTML the page renders.
+        frag, _active = _loot_live_region(daemon, control())
+        return html(frag)
+
     def _loot_redirect(ctl, message, err=False):
         from flask import redirect
         qs = ctl.get("qs") or ""
@@ -2352,6 +2360,44 @@ def _wps_attack_card(target, control, progress, fresh):
     pct_txt = ""
     if isinstance(pct, (int, float)):
         pct_txt = " · ~%.1f%% through the PIN space" % pct
+
+    # Honest futility check: a WPS attack that is locked, or that has NACKed for
+    # a couple of minutes without the PIN space moving, is going nowhere -- the
+    # AP is WPS-locked / external-registrar-disabled, which most modern routers
+    # are. Say so plainly and point at the attack that DOES work on any AP
+    # (capture the handshake, crack it on Loot) rather than a hopeful ~0.0%.
+    started = prog.get("started_at")
+    elapsed = (time.time() - started) if isinstance(started, (int, float)) else 0
+    # "No progress" guards against crying futile on an attack that IS advancing
+    # but hit a momentary rate-limit: a locked/NACKing AP stuck near 0% for a
+    # couple of minutes is the real dead end.
+    no_progress = (pct is None or pct < 0.5)
+    futile = no_progress and (
+        bool(prog.get("locked")) and elapsed > 60
+        or bool(prog.get("nacking")) and elapsed > 120)
+    if futile:
+        why = ("is rate-limiting WPS (locked)" if prog.get("locked")
+               else "answers every PIN with a WSC NACK")
+        html_out = (
+            '<p class="msg err"><strong>This AP is resisting — WPS won\'t crack '
+            'it.</strong> ' + _esc(target or "The AP") + " " + why
+            + ". That means WPS is locked or the external registrar is disabled, "
+            "which is normal for most routers built in the last several years. "
+            "No amount of waiting changes it.</p>"
+            '<p class="count"><strong>Do this instead:</strong> Stop below, then '
+            "crack it the universal way — capture its 4-way handshake (it just "
+            "needs a client to join while capture runs) and the quick-crack "
+            "worker will chew on it; recovered keys land on " + loot + ". WPS is "
+            "only a shortcut for the minority of APs that leave it unlocked.</p>")
+        meta = []
+        if isinstance(started, (int, float)):
+            meta.append("elapsed %s" % _fmt_span(max(0, int(elapsed))))
+        if prog.get("last"):
+            meta.append(_esc(str(prog["last"])))
+        if meta:
+            html_out += '<p class="smeta">' + " · ".join(meta) + "</p>"
+        return html_out
+
     line = ("Attacking " + _esc(target or "an AP") + " — reaver is "
             + _esc(phrase) + pct_txt + ". reaver can take many minutes; the key "
             "lands on " + loot + " if it succeeds. This page updates on its own.")
@@ -2378,8 +2424,14 @@ def _wps_attack_card(target, control, progress, fresh):
 
 def _wps_scan_rows():
     """Parse the last ``kestrel wps scan`` output (wash) into
-    ``[{bssid, channel, info}]`` for the /wps table -- best-effort, one row per
-    distinct BSSID. Empty when there is no scan file yet."""
+    ``[{bssid, channel, info, locked, wps}]`` for the /wps table -- best-effort,
+    one row per distinct BSSID, likely-attackable (unlocked) targets first. Empty
+    when there is no scan file yet.
+
+    wash's columns after BSSID/Ch are ``dBm  WPS-version  Lck(Yes/No)  [Vendor]
+    ESSID``. Reading ``locked`` from the fixed third column is robust regardless
+    of what the ESSID contains -- a locked AP just NACKs, so surfacing it lets
+    the operator skip a futile target instead of learning it the hard way."""
     rows, seen = [], set()
     try:
         with open(WPS_SCAN_FILE, "r", encoding="utf-8") as fh:
@@ -2394,8 +2446,16 @@ def _wps_scan_rows():
         if bssid in seen:
             continue
         seen.add(bssid)
-        rows.append({"bssid": bssid, "channel": m.group(2),
-                     "info": re.sub(r"\s+", " ", m.group(3).strip())})
+        info = re.sub(r"\s+", " ", m.group(3).strip())
+        parts = info.split(" ")
+        locked, wps_ver = None, ""
+        if len(parts) >= 3 and parts[2] in ("Yes", "No"):
+            wps_ver = parts[1]
+            locked = parts[2] == "Yes"
+        rows.append({"bssid": bssid, "channel": m.group(2), "info": info,
+                     "wps": wps_ver, "locked": locked})
+    # Unlocked (real targets) first, unknown next, locked (poor targets) last.
+    rows.sort(key=lambda r: {False: 0, None: 1, True: 2}[r["locked"]])
     return rows
 
 
@@ -3010,6 +3070,46 @@ def _connect_state(essid, visible, connected):
     return "connectable" if essid in (visible or ()) else "out-of-range"
 
 
+# The crack box (the "Quick-crack" readout + the worker/queue strip) polls this
+# fragment on its own so the live numbers advance without reloading the whole
+# page -- a full reload would blow away the crack-more / ingest / group forms
+# while the operator is mid-edit (docs/developer/web-ui-conventions.md). The
+# poll pauses while the tab is hidden; same-origin so Basic/system auth rides
+# along on the fetch. 5s is gentle on the auth socket for a long crack run.
+_LOOT_LIVE_JS = (
+    "<script>(function(){var box=document.getElementById('crackbox');"
+    "if(!box)return;var url=URL;"
+    "function tick(){if(document.hidden)return;"
+    "fetch(url,{credentials:'same-origin'}).then(function(r){"
+    "return r.ok?r.text():null;}).then(function(t){"
+    "if(t!==null)box.innerHTML=t;}).catch(function(){});}"
+    "setInterval(tick,5000);})();</script>"
+)
+
+
+def _loot_live_region(daemon, control, status=None):
+    """The live crack region -- the ``Quick-crack`` readout plus the worker /
+    queue / controls strip -- as the inner HTML of ``#crackbox``. Rendered inline
+    by :func:`_render_loot` and re-served on its own by ``/loot/crack-live`` so
+    the box self-updates without a full-page reload. ``status`` is reused when
+    the caller already has it (the page render), re-fetched fresh otherwise (the
+    poll). Returns ``(inner_html, active)``; ``active`` is True while a crack job
+    is actually running, so the page can skip the poller when idle."""
+    status = status if status is not None else daemon.status()
+    crack = status.get("crack") or {}
+    elements = (status.get("widgets") or {}).get(CRACK_CARD_NAME)
+    if elements:
+        readout = _render_widgets({CRACK_CARD_NAME: elements})
+    else:
+        readout = ('<p class="count">The crack worker has not reported yet. It '
+                   "cracks captured handshakes against your wordlists on the "
+                   "CPU; add a wordlist and capture a handshake to get going.</p>")
+    crack_rule = (daemon._fresh_config().get("crack") or {}).get("rules") or []
+    control_strip = _crack_control_strip(crack, control, rule=crack_rule)
+    active = ((crack.get("status") or {}).get("state") or "") == "cracking"
+    return readout + control_strip, active
+
+
 def _render_loot(daemon, control=None, message=None, error=False):
     """The Loot page, reached from the dashboard's "Loot" nav card: the recovered
     passwords (in cleartext) for every captured AP, the crack worker's live
@@ -3018,9 +3118,6 @@ def _render_loot(daemon, control=None, message=None, error=False):
     re-run against another list or ruleset. Kept off the dashboard like the agent
     page so it doesn't crowd the main view."""
     status = daemon.status()
-    crack = status.get("crack") or {}
-    widgets = status.get("widgets") or {}
-    elements = widgets.get(CRACK_CARD_NAME)
     aps = crack_store.LootStore(CRACK_DIR).load()
 
     banner = ""
@@ -3028,12 +3125,8 @@ def _render_loot(daemon, control=None, message=None, error=False):
         banner = ('<p class="msg' + (" err" if error else "") + '">'
                   + _esc(message) + "</p>")
 
-    if elements:
-        readout = _render_widgets({CRACK_CARD_NAME: elements})
-    else:
-        readout = ('<p class="count">The crack worker has not reported yet. It '
-                   "cracks captured handshakes against your wordlists on the "
-                   "CPU; add a wordlist and capture a handshake to get going.</p>")
+    live_inner, _active = _loot_live_region(daemon, control, status=status)
+    live = '<div id="crackbox">' + live_inner + "</div>"
 
     # The loot table: one row per AP, cracked first, password in cleartext.
     _crack_cfg = daemon._fresh_config().get("crack") or {}
@@ -3149,12 +3242,11 @@ def _render_loot(daemon, control=None, message=None, error=False):
     guide = _loot_guide()
     gpu = _loot_gpu_section(control)
     back = '<p><a href="' + _esc(_url("/", control)) + '">&larr; Dashboard</a></p>'
-    crack_rule = (daemon._fresh_config().get("crack") or {}).get("rules") or []
-    control_strip = _crack_control_strip(crack, control, rule=crack_rule)
+    live_js = _LOOT_LIVE_JS.replace("URL", _js(_url("/loot/crack-live", control)))
     return _page(
         "Loot - Kestrel",
-        back + "<h1>Loot</h1>" + banner + readout + control_strip
-        + table + form + group_form + gpu + guide,
+        back + "<h1>Loot</h1>" + banner + live
+        + table + form + group_form + gpu + guide + live_js,
     )
 
 
@@ -3460,14 +3552,24 @@ def _render_wps(daemon, control=None, message=None, error=False,
                     + ">Attack</button></form>")
             else:
                 act = '<span class="smeta">—</span>'
+            # The lock verdict: an AP that advertises WPS but has it LOCKED just
+            # NACKs every PIN, so flag it as a poor target up front rather than
+            # letting the operator burn an hour on it.
+            if r.get("locked") is True:
+                tgt = '<span class="pill p-pending">locked — poor target</span>'
+            elif r.get("locked") is False:
+                tgt = '<span class="pill p-cracked">unlocked — try it</span>'
+            else:
+                tgt = '<span class="smeta">unknown</span>'
             trows.append(
                 '<tr><td data-label="bssid">' + _esc(r["bssid"]) + "</td>"
                 '<td data-label="ch">' + _esc(r["channel"]) + "</td>"
+                '<td data-label="wps target">' + tgt + "</td>"
                 '<td data-label="details">' + _esc(r["info"]) + "</td>"
                 '<td data-label="attack">' + act + "</td></tr>")
         table = ("<div class='wrap'><table><thead><tr><th>bssid</th><th>ch</th>"
-                 "<th>details</th><th>attack</th></tr></thead><tbody>"
-                 + "".join(trows) + "</tbody></table></div>")
+                 "<th>wps target</th><th>details</th><th>attack</th></tr></thead>"
+                 "<tbody>" + "".join(trows) + "</tbody></table></div>")
     elif scanning:
         table = ""                              # results land when the scan ends
     elif os.path.exists(WPS_SCAN_FILE):
@@ -3477,10 +3579,14 @@ def _render_wps(daemon, control=None, message=None, error=False,
         table = ('<p class="count">No WPS scan results yet. Run a scan to list '
                  "the WPS-enabled access points in range.</p>")
 
-    note = ('<p class="smeta">Attacks run reaver with the offline Pixie-Dust '
-            "attack first. Lab / authorized use only; a recovered key appears on "
-            "the Loot page tagged <em>via WPS</em>. More detail: the on-device "
-            "guide (<code>/guide</code>).</p>")
+    note = ('<p class="smeta"><strong>WPS is a shortcut, not the main attack.</strong> '
+            "It only works on the minority of APs that leave WPS <em>unlocked</em> "
+            "(try those); most modern routers lock it and will just NACK forever. "
+            "The attack that works on <em>any</em> AP is capturing its handshake and "
+            "cracking it — see the Loot page. Attacks run reaver with offline "
+            "Pixie-Dust first; lab / authorized use only; a recovered key appears on "
+            "Loot tagged <em>via WPS</em>. More detail: the guide "
+            "(<code>/guide</code>).</p>")
     # Self-refresh while a scan/attack is running (or was just launched) so the
     # page flips to results / idle on its own; it stops once idle (no script).
     tail = _AGENT_STARTING_JS if busy else ""

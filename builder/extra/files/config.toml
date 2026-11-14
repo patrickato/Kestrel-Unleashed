@@ -351,6 +351,12 @@ channel = 1
 portal_ip = "10.0.0.1"
 dhcp_start = "10.0.0.10"
 dhcp_end = "10.0.0.250"
+# Two more [evil-portal] keys are read with code defaults when absent, so they
+# need no shipped line and stay app-layer-updatable:
+#   profile  -- active portal profile (own SSID + sign-in page); manage with
+#               `kestrel evil-portal profile ...`. Empty = shipped neutral page.
+#   country  -- Wi-Fi regulatory domain (e.g. "US"); set only if the dongle
+#               won't bring the AP up without one.
 
 # All reference plugins ship DISABLED. `kestrel plugins enable <name>`
 # shows the plugin's capabilities, takes the authorized-use acknowledgment for
