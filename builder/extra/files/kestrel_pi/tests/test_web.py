@@ -1216,6 +1216,27 @@ def test_crack_control_strip_shows_stop_only_while_cracking():
     assert "Stop current" not in web._crack_control_strip(base, _ctl())
 
 
+def test_crack_control_strip_rule_toggle():
+    base = {"enabled": True, "status": {"state": "idle", "paused": False,
+                                        "queue_jobs": []}}
+    off = web._crack_control_strip(base, _ctl(), rule=[])
+    assert "Off (raw)" in off and 'value="best64.rule"' in off   # raw active, best64 offered
+    armed = web._crack_control_strip(base, _ctl(), rule=["best64.rule"])
+    assert 'value="off"' in armed                                # can switch back to raw
+    assert "Off (raw)" not in web._crack_control_strip(base, _ctl())  # no param -> hidden
+
+
+def test_loot_rules_toggle_posts_through_apply(monkeypatch, tmp_path):
+    client, sent = _client(monkeypatch, tmp_path, BASIC)
+    page = client.get("/loot", headers=_basic()).get_data(as_text=True)
+    assert "Off (raw)" in page and "best64" in page              # toggle rendered
+    resp = client.post("/loot", headers=_basic(),
+                       data={"csrf": _csrf(page), "action": "crack-rules",
+                             "rule": "best64.rule"}, follow_redirects=False)
+    assert resp.status_code == 303
+    assert {"target": "crack-rules", "value": "best64.rule"} in sent
+
+
 def test_loot_stop_current_requests_stop(monkeypatch, tmp_path):
     from kestrel_pi.crack import store as crack_store
 

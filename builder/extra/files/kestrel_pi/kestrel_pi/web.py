@@ -688,6 +688,23 @@ def create_app(daemon):
                 return _loot_redirect(ctl, "Cleared %d queued job(s)." % n)
             return _loot_redirect(ctl, "Nothing changed.")
 
+        # Toggle the crack rule (off/best64). Goes through the root apply path
+        # (config.toml is root-owned, unlike the pi-owned pause/queue controls);
+        # the CLI it calls also re-arms the backlog so an armed rule runs.
+        if request.form.get("action") == "crack-rules":
+            value = request.form.get("rule") or "off"
+            reply = apply_change({"target": "crack-rules", "value": value})
+            if not reply.get("ok"):
+                return _loot_redirect(ctl, reply.get("error")
+                                      or "Could not change the rule.", err=True)
+            if value == "off":
+                msg = "Rule off — raw wordlists (fastest on the Pi)."
+            else:
+                msg = ("Rule %s armed and the backlog re-armed. Heads up: a rule "
+                       "is ~64× the work per list on the Pi's CPU — better "
+                       "suited to the GPU." % value)
+            return _loot_redirect(ctl, msg)
+
         # Connect / disconnect the station Wi-Fi to a cracked network (the loot
         # table's Connect control, for a field uplink when the phone dies). The
         # key comes from the loot store; NetworkManager is driven as root through
@@ -2896,11 +2913,25 @@ def _crack_ctl_button(control, value, label, cls=""):
             + '<button type="submit"' + klass + ">" + _esc(label) + "</button></form>")
 
 
-def _crack_control_strip(crack, control):
+def _crack_rules_button(control, value, label, active):
+    """A rule-toggle button for the crack strip; the active rule renders disabled
+    and highlighted. Posts through the root apply path (config.toml is root-owned,
+    unlike the pi-owned pause/queue controls)."""
+    qs = _esc((control or {}).get("qs", ""))
+    attrs = ' disabled class="on"' if active else ""
+    return ('<form class="inline" method="post" action="/loot' + qs + '">'
+            + _csrf_field(control)
+            + '<input type="hidden" name="action" value="crack-rules">'
+            + '<input type="hidden" name="rule" value="' + _esc(value) + '">'
+            + '<button type="submit"' + attrs + ">" + _esc(label) + "</button></form>")
+
+
+def _crack_control_strip(crack, control, rule=None):
     """Worker state + pause/resume + the pending queue, shown atop the Loot page
     so the cracker can be steered (not just watched). Reads the worker's status
     (``paused``, ``queue_jobs``, ``current``); writes go through the pi-owned
-    crack dir via /loot, like the queue itself."""
+    crack dir via /loot, like the queue itself. ``rule`` is the configured
+    ``[crack] rules`` list (``None`` hides the rule toggle)."""
     st = (crack or {}).get("status") or {}
     enabled = bool(crack.get("enabled", st.get("enabled", True)))
     paused = bool(st.get("paused"))
@@ -2952,8 +2983,20 @@ def _crack_control_strip(crack, control):
                                           "Clear queue", "danger"))
         controls = '<div class="power">' + "".join(btns) + "</div>"
 
+    rules_html = ""
+    if ready and enabled and rule is not None:
+        active = rule[0] if isinstance(rule, (list, tuple)) and rule else "off"
+        rbtns = [_crack_rules_button(control, "off", "Off (raw)", not rule),
+                 _crack_rules_button(control, "best64.rule", "best64",
+                                     active == "best64.rule")]
+        rules_html = ('<p class="smeta">Rule (CPU: raw is fastest on the Pi; '
+                      'best64 multiplies hits but ~64× the work — rule passes '
+                      'are better on the GPU):</p><div class="power">'
+                      + "".join(rbtns) + "</div>")
+
     return ('<div class="wladd"><p class="pwrlabel">Crack worker: '
-            + _esc(worker) + "</p>" + cur_html + queue_html + controls + "</div>")
+            + _esc(worker) + "</p>" + cur_html + queue_html + controls
+            + rules_html + "</div>")
 
 
 def _connect_state(essid, visible, connected):
@@ -3106,7 +3149,8 @@ def _render_loot(daemon, control=None, message=None, error=False):
     guide = _loot_guide()
     gpu = _loot_gpu_section(control)
     back = '<p><a href="' + _esc(_url("/", control)) + '">&larr; Dashboard</a></p>'
-    control_strip = _crack_control_strip(crack, control)
+    crack_rule = (daemon._fresh_config().get("crack") or {}).get("rules") or []
+    control_strip = _crack_control_strip(crack, control, rule=crack_rule)
     return _page(
         "Loot - Kestrel",
         back + "<h1>Loot</h1>" + banner + readout + control_strip

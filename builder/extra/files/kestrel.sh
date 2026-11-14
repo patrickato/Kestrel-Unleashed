@@ -2138,6 +2138,7 @@ cmd_crack() {
         pause) cmd_crack_pause ;;
         resume) cmd_crack_resume ;;
         stop) cmd_crack_stop ;;
+        rules) cmd_crack_rules "$@" ;;
         tune) cmd_crack_tune "$@" ;;
         queue) cmd_crack_queue ;;
         clear-queue) cmd_crack_clear_queue ;;
@@ -2165,6 +2166,31 @@ cmd_crack_resume() {
 cmd_crack_stop() {
     run_as_pi "$PWN_VENV_PYTHON" -I -c 'from kestrel_pi.crack import store, CRACK_DIR; store.request_stop(CRACK_DIR)'
     log "asked the crack worker to stop the current job (it stays pending, not exhausted)"
+}
+
+# Set the on-device crack rule: "off" (raw wordlists) or a bundled hashcat rule
+# file like best64.rule. Arming a rule re-arms the backlog so it runs against
+# already-tried networks -- the rule is not part of the per-wordlist tried-
+# signature, so without this an armed rule would only affect new captures.
+cmd_crack_rules() {
+    local val="${1:-}"
+    [ -n "$val" ] || die "usage: $PROG crack rules <off|RULEFILE>  (e.g. best64.rule)"
+    need_root
+    local wd
+    wd=$(cfg crack.wordlists_dir "$PWN_WORDLISTS_DIR")
+    case "$val" in
+        off|none|raw)
+            config_set crack rules '[]'
+            log "rules: off (raw wordlists -- rule passes belong on the GPU)" ;;
+        *)
+            if [ -f "$wd/$val" ] || [ -f "/usr/share/hashcat/rules/$val" ]; then
+                config_set crack rules "[\"$val\"]"
+                find "$wd" -maxdepth 1 -type f ! -name '*.rule' -exec touch {} + 2>/dev/null || true
+                log "rules: $val armed; re-armed the backlog so it runs against already-tried networks"
+            else
+                die "rule not found: $val (looked in $wd and /usr/share/hashcat/rules)"
+            fi ;;
+    esac
 }
 
 # One-shot: put the on-device cracker in the "fast, raw, broad" Pi profile --
@@ -2203,20 +2229,9 @@ cmd_crack_tune() {
         die "John is not installed (command -v john found nothing); fix John before tuning"
     fi
 
-    # 2. rule
-    case "$rules_arg" in
-        off|none|raw|"")
-            config_set crack rules '[]'
-            log "rules: off (raw wordlists -- rule passes belong on the GPU)" ;;
-        *)
-            if [ -f "$wd/$rules_arg" ] || [ -f "/usr/share/hashcat/rules/$rules_arg" ]; then
-                config_set crack rules "[\"$rules_arg\"]"
-                rearm=yes
-                log "rules: $rules_arg armed"
-            else
-                die "rule not found: $rules_arg (looked in $wd and /usr/share/hashcat/rules)"
-            fi ;;
-    esac
+    # 2. rule (+ re-arm when arming) -- shared with `kestrel crack rules`
+    cmd_crack_rules "$rules_arg"
+    case "$rules_arg" in off|none|raw|"") rearm=no ;; *) rearm=yes ;; esac
 
     # 3. report wordlists (+ optional prune), as pi (it owns the dir)
     echo "Wordlists in $wd:"
@@ -2259,12 +2274,6 @@ elif any(r[3] for r in rows) and not prune:
     print("  re-run with --prune to move the flagged list(s) into an offload/ holding pen")
 ' || die "could not scan the wordlists"
 
-    # 4. re-arm the backlog when a rule was newly armed (the rule is not part of
-    # the tried-signature, so already-tried nets would otherwise skip it)
-    if [ "$rearm" = yes ]; then
-        find "$wd" -maxdepth 1 -type f ! -name '*.rule' -exec touch {} + 2>/dev/null || true
-        log "re-armed the backlog so '$rules_arg' runs against already-tried networks"
-    fi
     [ "$(cfg crack.enabled false)" = true ] || log "note: quick-crack is off; run 'sudo $PROG crack enable' to start churning"
     log "tuned for the Pi: John engine, rules=$([ "$rearm" = yes ] && echo "$rules_arg" || echo off)"
 }

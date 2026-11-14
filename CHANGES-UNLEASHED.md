@@ -746,6 +746,24 @@ profile without remembering the pieces (engine, rules, the re-arm gotcha):
 
 `kestrel.sh` only (CLI). Release impact: **app-layer-safe**. shellcheck clean.
 
+### Added: crack rule toggle — CLI `crack rules` + dashboard button
+A one-step way to flip the on-device rule without hand-editing config or
+forgetting the re-arm:
+
+- `kestrel crack rules <off|RULEFILE>` sets `[crack] rules` and, when arming,
+  re-arms the backlog (`touch` the lists) so the rule runs against already-tried
+  networks. `tune` now shares this path.
+- `/loot` crack strip gains an **Off (raw) / best64** rule toggle (the active one
+  highlighted), routed through a new root `crack-rules` apply target (config.toml
+  is root-owned) that allow-lists `off` / `best64.rule` / `rockyou-30000.rule`
+  and shells the CLI. The UI labels raw as fastest on the Pi and flags best64 as
+  ~64× the work (GPU-better), matching the raw-on-Pi division of labor.
+
+Touched: `kestrel.sh`, `plugins-ctl.py`, `web.py`, `userguide.py`, tests,
+changelog. Release impact: **app-layer-safe** — CLI, the root apply helper and
+the package; no new deps/units/config. Tests: +2; 1245 pass, 12 skipped, lint
+clean.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

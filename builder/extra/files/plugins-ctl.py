@@ -1254,6 +1254,26 @@ def apply_config_set(change):
             "restart": restart, "restart_hint": hint}
 
 
+def apply_crack_rules(change):
+    """Toggle the on-device crack rule from the web Loot page:
+
+      {"target": "crack-rules", "value": "off" | "best64.rule" | "rockyou-30000.rule"}
+
+    A short allow-list of bundled hashcat rules (or "off" for raw wordlists). The
+    shipped CLI does the config write *and* re-arms the backlog so an armed rule
+    runs against already-tried networks (the rule isn't part of the per-wordlist
+    tried-signature). CLI is root-owned and trusted, like the capture calls."""
+    value = change.get("value")
+    if value not in ("off", "best64.rule", "rockyou-30000.rule"):
+        return {"ok": False, "error": "unknown rule"}
+    rc, out = _run_capture_cli(["crack", "rules", value])
+    if rc != 0:
+        detail = out.splitlines()[-1] if out else _silent_cli_error("crack", rc)
+        return {"ok": False, "error": detail}
+    sys.stderr.write("plugins-ctl apply: crack rules %s via web\n" % value)
+    return {"ok": True, "crack_rules": value, "restart": False}
+
+
 def apply_change(change):
     """Validate and apply one change from the web page.
 
@@ -1303,6 +1323,8 @@ def apply_change(change):
                 "first (sudo kestrel web auth basic)"}
     if change.get("target") == "capture":
         return apply_capture(change)
+    if change.get("target") == "crack-rules":
+        return apply_crack_rules(change)
     if change.get("target") == "wps":
         return apply_wps(change)
     if change.get("target") == "evil-portal":

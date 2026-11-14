@@ -316,6 +316,7 @@ kestrel crack queue                  # what manual jobs are lined up
 kestrel crack pause                  # soft-pause the worker (finishes the current job, then holds)
 kestrel crack resume                 # resume after a pause
 kestrel crack stop                   # abort the job running right now (the AP stays pending)
+sudo kestrel crack rules best64.rule # arm a rule (off = raw); also re-arms the backlog
 sudo kestrel crack tune              # one-shot: pin John, raw wordlists, flag/prune oversized lists
 kestrel crack clear-queue            # drop all pending queued jobs
 sudo kestrel crack disable           # turn auto-cracking off (and enable to turn back on)
@@ -328,7 +329,11 @@ Pause is a soft hold — the current job finishes, then the worker idles until y
 resume — distinct from `disable`, which is the hard off. While a job is actually
 cracking a **Stop current** button appears: it aborts *that* job immediately
 (kills the live cracker) instead of waiting for it to finish, and the network it
-was on stays **pending** — it is not marked tried, so it will be attempted again. An AP that has been
+was on stays **pending** — it is not marked tried, so it will be attempted again.
+A **Rule** toggle sits below the controls: **Off (raw)** is fastest on the Pi's
+CPU; **best64** multiplies hits but is ~64× the work (better suited to the GPU).
+Switching it on also re-arms the backlog so the rule runs against already-tried
+networks. An AP that has been
 tried against every wordlist is marked **exhausted** and is not re-cracked (even
 after a reboot); those are the ones worth sending to the GPU kit.
 
