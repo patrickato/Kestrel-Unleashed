@@ -13,6 +13,10 @@ SSID**, so each distinct network is its own job. Consequences:
 
 - A big list is an *overnight* job, not a "quick" one. `rockyou` (~9.6M usable
   entries) is ~1.5–3 hours **per network** at this speed.
+- **With the John engine, one wordlist run covers the whole backlog at once**
+  (multi-salt), and networks that share an SSID share the work — so the per-net
+  times below are worst-case (all-distinct SSIDs); a capture with many repeated
+  SSIDs finishes a pass faster.
 - **Smallest-first wins.** Quick, targeted lists catch the easy keys in minutes;
   the big list is the last resort that grinds in the background. Kestrel does this
   automatically (`[crack] order = "size"`), so you just drop lists in.

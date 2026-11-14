@@ -638,7 +638,7 @@ class CrackWorker:
             return "cracking", True, self._run_manual_john(jobs[0], aps, conf)
         if not attacks:
             return "no-wordlists", False, None
-        batch = store_mod.next_auto_batch(aps, targets, attacks, recrack)
+        batch = store_mod.next_auto_batch_multi(aps, targets, attacks, recrack)
         if batch is None:
             return "idle", False, None
         current, progressed = self._run_auto_john(batch, aps, conf)
@@ -671,9 +671,18 @@ class CrackWorker:
                 break
         return cracked, stopped
 
+    def _john_run(self, targets, attack, conf, origin):
+        """Crack ``targets`` with ``attack`` under John. A dict wordlist runs
+        multi-salt -- all targets in one John pass (:meth:`_crack_batch_john`); a
+        mask / per-device attack stays per-AP (:meth:`_john_attack`). Returns
+        ``(cracked, stopped)`` either way."""
+        if attack.get("kind") == "mask" or attack.get("only_bssid"):
+            return self._john_attack(targets, attack, conf, origin)
+        return self._crack_batch_john(targets, attack, conf, origin)
+
     def _run_auto_john(self, batch, aps, conf):
         attack, tgts = batch
-        cracked, stopped = self._john_attack(tgts, attack, conf, "auto")
+        cracked, stopped = self._john_run(tgts, attack, conf, "auto")
         now = self._clock()
         progressed = False
         for target in tgts:
@@ -689,8 +698,12 @@ class CrackWorker:
             else:
                 LootStore.mark_tried(rec, attack["sig"])
             progressed = True
-        current = {"essid": tgts[0].get("essid"), "bssid": tgts[0].get("bssid"),
-                   "wordlist": attack["name"], "origin": "auto", "started": now}
+        multi = len(tgts) > 1
+        current = {"essid": ("%d networks" % len(tgts)) if multi
+                   else tgts[0].get("essid"),
+                   "bssid": "" if multi else tgts[0].get("bssid"),
+                   "wordlist": attack["name"], "origin": "auto", "started": now,
+                   "batch": len(tgts)}
         return current, progressed
 
     def _run_manual_john(self, job_entry, aps, conf):
@@ -710,7 +723,7 @@ class CrackWorker:
         targets = targets_from_events(events)
         for target in targets:
             LootStore.upsert(aps, target, now=self._clock())
-        cracked, stopped = self._john_attack(targets, attack, conf, "manual") \
+        cracked, stopped = self._john_run(targets, attack, conf, "manual") \
             if targets else ({}, set())
         now = self._clock()
         for target in targets:
@@ -793,6 +806,61 @@ class CrackWorker:
             if found_bssid.upper() == bssid:
                 return password
         return None
+
+    def _crack_batch_john(self, targets, attack, conf, origin=""):  # pragma: no cover
+        """Crack MANY APs against one wordlist in a SINGLE John run (multi-salt):
+        one hashfile holding every target's hashlines, one John invocation, then
+        reconcile every recovered key by BSSID via ``john --show``. John tests
+        each candidate against all loaded salts at once -- and identical ESSIDs
+        share the PBKDF2 work -- so this is dramatically faster on a backlog than
+        one run per AP. Returns ``({bssid: password}, stopped)``; any key cracked
+        before an operator stop is kept, the rest of the batch stays pending.
+        On-device; tests override this (like ``_crack_one_john``)."""
+        bssids, lines = [], []
+        for target in targets:
+            bssid = (target.get("bssid") or "").upper()
+            if not bssid:
+                continue
+            bssids.append(bssid)
+            lines.extend(target.get("lines")
+                         or ([target["hashline"]] if target.get("hashline") else []))
+        if not bssids or not lines:
+            return {}, set()
+        if self._should_stop():
+            self._stopped = True
+            return {}, set(bssids)                 # aborted before we started
+        hashfile = self._build_john_hashfile(lines)
+        if not hashfile:
+            return {}, set()
+        wl = attack.get("path", "")
+        if not os.path.isfile(wl):
+            return {}, set()
+        pot = os.path.join(self.crack_dir, "john.pot")
+        timeout = int(conf.get("max_job_seconds") or 0) or None
+        rules = conf.get("rules") or []
+        rule = rules[0] if isinstance(rules, (list, tuple)) and rules else None
+        cmd = john_mod.build_crack_cmd(hashfile, wl, pot, rules=rule)
+        base = {"state": "cracking", "bssid": "",
+                "essid": "%d networks" % len(bssids),
+                "wordlist": attack.get("name", ""), "origin": origin,
+                "started": self._clock(), "batch": len(bssids)}
+        progress_mod.write_progress(self.crack_dir, base, now=self._clock())
+        if self._stream:
+            self._run_john_streaming(cmd, base, timeout, should_stop=self._should_stop)
+        else:
+            self._runner(cmd, timeout=timeout)
+        _rc, out, _err = self._runner(john_mod.build_show_cmd(hashfile, pot), timeout=60)
+        want = set(bssids)
+        cracked = {}
+        for found_bssid, _essid, password in john_mod.parse_show(out or ""):
+            fb = found_bssid.upper()
+            if fb in want:
+                cracked[fb] = password
+        stopped = set()
+        if self._should_stop():                    # killed mid-run: keep cracks,
+            self._stopped = True                   # leave the rest pending
+            stopped = want - set(cracked)
+        return cracked, stopped
 
     def _run_john_streaming(self, cmd, base, timeout,
                             should_stop=None):  # pragma: no cover

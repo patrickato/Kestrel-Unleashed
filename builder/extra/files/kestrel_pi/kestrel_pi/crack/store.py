@@ -362,6 +362,40 @@ def next_auto_batch(aps, targets, attacks, recrack_on_new=True):
     return None
 
 
+def next_auto_batch_multi(aps, targets, attacks, recrack_on_new=True):
+    """Like :func:`next_auto_batch`, but for a multi-salt engine (John): the first
+    attack (in order) with any untried uncracked target, paired with **every**
+    uncracked target that has not tried it -- so one wordlist run covers the whole
+    backlog in a single pass instead of one AP at a time. John loads all salts at
+    once and identical ESSIDs share the PBKDF2 work, so this is far faster on a
+    backlog. A per-device (``only_bssid``) or ``mask`` attack still returns a
+    single target -- those are inherently per-AP. Returns ``(attack, [targets])``
+    or ``None``. ``attacks`` come from :func:`build_attacks`; the attack-first
+    order still opens the smallest list first, now across every AP at once."""
+    by_bssid = {}
+    for target in targets:
+        bssid = (target.get("bssid") or "").upper()
+        if bssid:
+            by_bssid.setdefault(bssid, target)
+    for attack in attacks:
+        only = attack.get("only_bssid")
+        per_ap = bool(only) or attack.get("kind") == "mask"
+        batch = []
+        for bssid, target in by_bssid.items():
+            if only and only != bssid:
+                continue
+            rec = aps.get(bssid)
+            if rec is None or rec.get("password"):
+                continue
+            if not _tried_has(rec, attack, recrack_on_new):
+                batch.append(target)
+                if per_ap:
+                    break                      # mask / per-device: one AP per run
+        if batch:
+            return attack, batch
+    return None
+
+
 # --- the manual-job queue --------------------------------------------------
 
 def queue_path(crack_dir):

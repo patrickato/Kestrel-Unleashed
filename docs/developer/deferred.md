@@ -184,22 +184,6 @@ How to use this file:
 - **Pick up when:** image size or build time becomes a pain point, or a
   reproducible hosted artifact is wanted over an in-chroot compile.
 
-### Crack all uncracked APs in one John run (multi-salt)
-
-- **What:** John loads many salts at once, so one run could crack every uncracked
-  AP against a wordlist in a single pass. The worker currently cracks **one AP
-  per pass** (parity with aircrack), which re-reads the wordlist per AP.
-- **Why deferred:** the one-AP-per-pass cadence and its per-AP/per-wordlist
-  "tried" bookkeeping are shared with aircrack; a multi-salt John pass needs its
-  own batch accounting, and correctness mattered more than throughput for a
-  blind, reflash-class first cut (the GPU offload is the fast path for big
-  backlogs anyway).
-- **What to do:** add a John-only batch that builds one hashfile from all
-  uncracked targets, runs John once per wordlist, and reconciles every recovered
-  key via `parse_show` (BSSID = the AP MAC it already returns).
-- **Pick up when:** on-device backlog cracking is a common workflow, or the
-  per-AP wordlist re-read proves too slow in the field.
-
 ## WPS attacks (`kestrel wps` / reaver)
 
 ### Validate the attack end-to-end on hardware

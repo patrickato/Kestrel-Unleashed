@@ -707,6 +707,30 @@ Touched: `crack/store.py`, `crack/controller.py`, `web.py`, `kestrel.sh`,
 package, the web layer and the CLI; no new deps/units/config. Tests: +3; 1240
 pass, 12 skipped, lint clean.
 
+### Added: John multi-salt — crack the whole backlog against a wordlist in one pass
+The worker cracked **one AP per wordlist pass** (parity with aircrack, which
+cracks one BSSID per run regardless). Under John that left throughput on the
+table: John loads many salts at once, and identical ESSIDs share the PBKDF2 work.
+The John auto/manual paths now crack **every uncracked AP against a wordlist in a
+single run** — far faster on a big backlog (e.g. hundreds of APs across far fewer
+distinct SSIDs).
+
+- `crack/store.py`: `next_auto_batch_multi` — the first untried dict attack paired
+  with *every* uncracked AP that hasn't tried it; a `mask`/`only_bssid` attack
+  still returns a single AP (those are inherently per-device). Pure, tested.
+- `crack/controller.py`: `_crack_batch_john` builds one hashfile from all the
+  batch's hashlines, runs John once, and reconciles every recovered key by BSSID
+  via `parse_show`; `_run_auto_john`/`_run_manual_john` dispatch dict→batch,
+  mask→per-AP. Honors stop (a key cracked before the abort is kept; the rest stay
+  pending) and writes an "N networks" live readout. The aircrack one-AP path is
+  untouched.
+- This is John-only on purpose — aircrack can't multi-salt — which is itself a
+  reason John is the right default engine.
+
+Touched: `crack/store.py`, `crack/controller.py`, tests, `deferred.md` (entry
+removed), changelog. Release impact: **app-layer-safe** — the package only; no
+new deps/units/config. Tests: +3; 1243 pass, 12 skipped, lint clean.
+
 ### Left for later (deliberately not changed yet)
 Kept at upstream defaults pending design discussion: the learning **agent**
 (`[agent]`) and the display/uploader **plugins** (e-ink face, session-stats, gps,

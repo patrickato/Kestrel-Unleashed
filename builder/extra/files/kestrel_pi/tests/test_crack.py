@@ -41,6 +41,7 @@ def _hashline(bssid_hex, essid, htype="02", mic="a" * 32, sta="665544332211"):
 # AP MACs as 12-hex (no colons, as hc22000 stores them) and their : form.
 AP1, AP1C = "001122334455", "00:11:22:33:44:55"
 AP2, AP2C = "aabbccddeeff", "AA:BB:CC:DD:EE:FF"
+AP3, AP3C = "112233445566", "11:22:33:44:55:66"
 
 
 def _write(path, text):
@@ -538,6 +539,84 @@ def test_manual_job_overrides_and_runs(tmp_path):
     assert store_mod.queue_len(worker.crack_dir) == 0       # job consumed
 
 
+def test_next_auto_batch_multi_groups_dict_singles_mask():
+    aps = {"AA:BB:CC:DD:EE:01": {"status": "pending", "tried": []},
+           "AA:BB:CC:DD:EE:02": {"status": "pending", "tried": []},
+           "AA:BB:CC:DD:EE:03": {"password": "x", "status": "cracked"}}
+    targets = [{"bssid": b} for b in aps]
+    dict_attack = {"kind": "dict", "name": "w", "path": "/w", "sig": "w:1:1"}
+    # a dict attack batches every uncracked, untried AP into one run
+    attack, batch = store_mod.next_auto_batch_multi(aps, targets, [dict_attack])
+    assert attack is dict_attack
+    assert {t["bssid"] for t in batch} == {"AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"}
+    # a mask attack stays single-AP even in multi mode
+    mask_attack = {"kind": "mask", "name": "?d?d", "mask": "?d?d", "sig": "mask:?d?d"}
+    _a, mbatch = store_mod.next_auto_batch_multi(aps, targets, [mask_attack])
+    assert len(mbatch) == 1
+    # a per-device (only_bssid) attack targets just its AP
+    dev = {"kind": "mask", "name": "?d", "mask": "?d", "sig": "mask:?d",
+           "only_bssid": "AA:BB:CC:DD:EE:02"}
+    _a, dbatch = store_mod.next_auto_batch_multi(aps, targets, [dev])
+    assert [t["bssid"] for t in dbatch] == ["AA:BB:CC:DD:EE:02"]
+    # nothing left once all are cracked/tried
+    for rec in aps.values():
+        rec["tried"] = ["w:1:1"]
+    assert store_mod.next_auto_batch_multi(aps, targets, [dict_attack]) is None
+
+
+def test_john_multi_salt_cracks_whole_batch_in_one_run(tmp_path, monkeypatch):
+    # Three APs, one wordlist: John cracks two of them in a SINGLE batch run,
+    # and the worker reconciles every key by BSSID in that one pass.
+    import kestrel_pi.crack.john as john_mod
+    monkeypatch.setattr(john_mod, "have_john", lambda *a, **k: True)
+    d = str(tmp_path)
+    _write(os.path.join(d, "wordlists", "small.txt"), "pw\n")
+    _write(os.path.join(d, "capture", "nets.hc22000"),
+           _hashline(AP1, "Net1") + "\n" + _hashline(AP2, "Net2") + "\n"
+           + _hashline(AP3, "Net3") + "\n")
+    cfg = _config(d, os.path.join(d, "wordlists"))
+    worker = _worker(tmp_path, cfg, FakeAircrack(), pcapng=False)
+
+    runs = {"n": 0}
+
+    def fake_batch(targets, attack, conf, origin=""):
+        runs["n"] += 1
+        got = {t["bssid"].upper() for t in targets}
+        # all three uncracked APs arrive together in ONE call
+        assert got == {AP1C, AP2C, AP3C}
+        return ({AP1C: "pw", AP2C: "pw"}, set())        # crack two, not the third
+    worker._crack_batch_john = fake_batch
+
+    state, did = worker.run_once()
+    aps = worker.loot.load()
+    assert runs["n"] == 1                                # one run for the whole batch
+    assert aps[AP1C]["status"] == "cracked" and aps[AP2C]["status"] == "cracked"
+    assert "small.txt" in {t.split(":")[0] for t in aps[AP3C]["tried"]}  # AP3 tried
+    assert aps[AP3C]["status"] != "cracked"
+    assert did is True and state == "cracking"
+
+
+def test_john_multi_salt_stop_keeps_cracks_rest_pending(tmp_path, monkeypatch):
+    import kestrel_pi.crack.john as john_mod
+    monkeypatch.setattr(john_mod, "have_john", lambda *a, **k: True)
+    d = str(tmp_path)
+    _write(os.path.join(d, "wordlists", "small.txt"), "pw\n")
+    _write(os.path.join(d, "capture", "nets.hc22000"),
+           _hashline(AP1, "Net1") + "\n" + _hashline(AP2, "Net2") + "\n")
+    cfg = _config(d, os.path.join(d, "wordlists"))
+    worker = _worker(tmp_path, cfg, FakeAircrack(), pcapng=False)
+
+    def fake_batch(targets, attack, conf, origin=""):
+        # one AP cracked before the abort; the other left pending (stopped)
+        return ({AP1C: "pw"}, {AP2C})
+    worker._crack_batch_john = fake_batch
+
+    worker.run_once()
+    aps = worker.loot.load()
+    assert aps[AP1C]["status"] == "cracked"         # crack before stop is kept
+    assert aps[AP2C]["tried"] == [] and aps[AP2C]["status"] == "pending"  # not tried
+
+
 def test_stop_current_aborts_without_marking_tried(tmp_path):
     # A manual job over two APs; a stop lands while the first AP is cracking.
     # The running AP is aborted and the rest are left untouched -- neither is
@@ -659,9 +738,11 @@ def test_run_once_john_engine_cracks_the_store(tmp_path, monkeypatch):
     cfg = _config(d, os.path.join(d, "wordlists"))
     worker = _worker(tmp_path, cfg, FakeAircrack(), pcapng=False)   # no pcapng!
 
-    def fake_john(target, attack, conf, origin=""):
-        return "hunter2!" if target["bssid"].upper() == AP1C else None
-    worker._crack_one_john = fake_john
+    def fake_batch(targets, attack, conf, origin=""):
+        # multi-salt: one run over all targets; only AP1's key is in this list
+        return ({t["bssid"].upper(): "hunter2!"
+                 for t in targets if t["bssid"].upper() == AP1C}, set())
+    worker._crack_batch_john = fake_batch
 
     for _ in range(12):
         _s, did = worker.run_once()
