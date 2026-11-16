@@ -383,11 +383,13 @@ Make sure hashcat is installed on the host and the `wordlist` path exists there.
 
 **Lab / authorized use only — this transmits.** Only run it against networks you own or are authorized to assess; it asks for the authorized-use acknowledgment first, the same one capture uses.
 
-Many home routers leave **WPS** on, and a WPS access point can be made to hand over its WPA passphrase. The offline **Pixie-Dust** attack (the default) recovers it in seconds-to-minutes when the router is vulnerable; a slow online PIN brute force is the `--no-pixie` fallback. A recovered key shows up on the **Loot** page and in `kestrel crack list` just like a cracked handshake, tagged `via WPS`.
+**WPS is a shortcut, not the main attack.** It only works on the minority of routers that leave WPS *unlocked*; most modern routers lock it (or disable the external registrar) and will just answer every PIN with a NACK forever. The attack that works on *any* AP is capturing its handshake and cracking it — see [On-device quick-crack](#on-device-quick-crack). Reach for WPS only when the scan shows an **unlocked** target.
+
+When a router is vulnerable, the offline **Pixie-Dust** attack (the default) recovers the WPA passphrase in seconds-to-minutes; a slow online PIN brute force is the `--no-pixie` fallback. A recovered key shows up on the **Loot** page and in `kestrel crack list` just like a cracked handshake, tagged `via WPS`.
 
 It uses the **capture dongle** (not the Pi's built-in Wi-Fi) and **pauses capture** while it runs — one radio, one job at a time. There is no always-on service; it only does something when you run it.
 
-From the dashboard (with the login on): the **WPS attacks** card (→ *WPS attacks* page) has a **Scan for WPS APs** button; the results list each WPS AP with an **Attack** button beside it (first attack asks the acknowledgment). While an attack runs the page shows a **live readout** — what reaver is doing (waiting, associating, trying PINs, Pixie-Dust), how far through the PIN space it is, and the elapsed time — so a long run is no longer a silent "please wait". It refreshes on its own, and a **Stop** button cancels the run, puts the dongle back and clears the state. The recovered key itself is never shown here — it lands on the Loot page. Over SSH `sudo kestrel wps attack` now streams reaver's output live too. From the terminal:
+From the dashboard (with the login on): the **WPS attacks** card (→ *WPS attacks* page) has a **Scan for WPS APs** button; the results list each AP with a **wps target** column — **unlocked — try it** (a real target, sorted to the top) or **locked — poor target** (it'll just NACK) — and an **Attack** button beside it (first attack asks the acknowledgment). While an attack runs the page shows a **live readout** — what reaver is doing, how far through the PIN space it is, and the elapsed time — and **when a target is going nowhere** (locked, or NACKing every PIN with no progress for a couple of minutes) it says so plainly and tells you to stop and crack the handshake instead, rather than a hopeful "~0.0%". It refreshes on its own, and a **Stop** button cancels the run, puts the dongle back and clears the state. The recovered key itself is never shown here — it lands on the Loot page. Over SSH `sudo kestrel wps attack` streams reaver's output live too. From the terminal:
 
 ```bash
 sudo kestrel wps scan                      # find WPS-enabled APs nearby
@@ -420,15 +422,36 @@ sudo kestrel deauth AA:BB:CC:DD:EE:FF --channel 6 --count 16       # pin the cha
 
 Evil-portal stands up a generic captive portal: an **open Wi-Fi** on the capture dongle, a catch-all DNS that points every lookup at the device, and a **portal page** — the one you supply, or a neutral built-in — that **logs every field** a client submits. It uses the capture dongle in AP mode (it must support AP mode) and **pauses capture** while it runs; it never starts on its own.
 
+**What it captures (and what it can't).** The portal records **what a person types into your sign-in page** and submits — that's the attack: someone joins the open network, your page asks them to "sign in," and they hand over a real username and password. It is phishing via a fake login, so nothing lands in `creds` until someone actually fills in the form and submits it. It does **not** silently pull saved passwords, accounts, or other data off the phone — no captive portal can; the phone's OS walls all of that off from any web page. Once a client submits the form, the portal marks them **connected** (answers their OS connectivity check), so the phone stops showing "no internet" and dropping the network.
+
 From the dashboard (with the login on): the **Evil-portal** card (→ *Evil-portal* page) shows whether the portal is running and its SSID/channel, has **Start portal** / **Stop portal** buttons (Start asks the acknowledgment), and — because the submissions are plaintext — lists what clients submitted right on the page, but only while the dashboard login is on. From the terminal:
 
 ```bash
 sudo kestrel evil-portal start     # open AP + portal (asks the ack, pauses capture)
+sudo kestrel evil-portal status    # per-link diagnostic: is the whole chain up?
 kestrel evil-portal creds          # what clients submitted
 sudo kestrel evil-portal stop      # tear down and resume capture
 ```
 
-To use your own portal page, copy the templates to `/etc/kestrel/evil-portal/templates/` and edit them there (keep the form's `action="/login"`); that path overrides the shipped neutral defaults. Settings — the SSID, channel and address range — live in `[evil-portal]` in `config.toml`.
+**The portal is plain HTTP, by design.** A joined phone should pop a "sign in to network" sheet on its own. If it doesn't, open a browser and go to **`http://10.0.0.1`** — not `https://`. There is no TLS certificate (a rogue AP can't have a valid one), so `https://10.0.0.1` fails with "you're offline"; that's expected, use `http://`.
+
+**If nothing happens at all** (no sign-in sheet, and `http://10.0.0.1` does nothing), run `sudo kestrel evil-portal status`. It checks every link a client must cross — the AP radio, the portal IP actually being on the interface, the `:80 → :8880` redirect, the portal server answering, and which clients took a DHCP lease — and marks the one that's broken with `[FAIL]`. Live portal log: `sudo journalctl -u kestrel-evil-portal -f`.
+
+### Your own portals (network name + sign-in page)
+
+A **profile** is your own named portal: a network name (SSID) plus a sign-in page you control. Make as many as you like and switch between them:
+
+```bash
+sudo kestrel evil-portal profile new cafe --ssid "Cafe Guest"   # create (seeded with a neutral page)
+sudo kestrel evil-portal profile edit cafe                      # edit its sign-in page (nano)
+sudo kestrel evil-portal profile import cafe ~/my-signin.html   # or drop in your own HTML
+sudo kestrel evil-portal profile use cafe                       # make it the active portal
+kestrel evil-portal profile list                                # all profiles (* = active)
+sudo kestrel evil-portal profile set-ssid cafe "Cafe WiFi"      # rename its network
+sudo kestrel evil-portal profile delete cafe                    # remove it
+```
+
+`profile use` sets the active profile and copies its SSID into `[evil-portal]`; restart the portal to apply (`stop` then `start`). Keep the form's `action="/login"` so submissions are logged. Serve pages that are honestly your own — **do not** imitate a real company or its login. With no active profile the shipped neutral page is served; the other settings (channel, address range, and an optional `country` for dongles that need a regulatory domain) live in `[evil-portal]` in `config.toml`.
 
 ---
 
@@ -901,8 +924,9 @@ This is the same mechanism as the first-boot Wi-Fi staging, and it works at any 
 | --- | --- |
 | `kestrel evil-portal start [--yes]` | Start the captive portal on the dongle (asks the authorized-use ack; pauses capture). |
 | `kestrel evil-portal stop` | Stop the portal and resume capture. |
-| `kestrel evil-portal status` | Service state, SSID, and how many submissions were captured. |
+| `kestrel evil-portal status` | Per-link diagnostic while running (AP radio, portal IP, `:80→:8880` redirect, portal server, client leases); service state and capture count otherwise. |
 | `kestrel evil-portal creds` | Show what clients submitted to the portal. |
+| `kestrel evil-portal profile list\|new\|use\|set-ssid\|edit\|import\|show\|delete` | Manage your own portals (network name + sign-in page); `profile use <name>` makes one active. |
 
 ### Kiosk
 

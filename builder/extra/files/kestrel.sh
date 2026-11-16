@@ -108,11 +108,14 @@ Usage: $PROG <command>
                      the radio that owns the 'attack' role (pausing capture only
                      if it shares the one adapter), refuses a whitelisted target,
                      and asks the authorized-use ack. Authorized use only.
-  evil-portal        Evil-portal status (captive-portal rogue AP; authorized use only)
+  evil-portal        Evil-portal per-link diagnostic (captive-portal rogue AP; authorized use only)
   evil-portal start [--yes]  Start the captive portal on the dongle; asks the
                      authorized-use ack and pauses capture
   evil-portal stop   Stop the portal (capture resumes)
   evil-portal creds  Show what clients submitted to the portal
+  evil-portal profile list|new|use|set-ssid|edit|import|show|delete
+                     Manage your own portals (network name + sign-in page); e.g.
+                     `profile new guest --ssid "Cafe WiFi"`, `profile use guest`
   kiosk              Kiosk status (dashboard full-screen on an HDMI touchscreen)
   kiosk enable [--url URL]   Show the dashboard full-screen on the HDMI screen
   kiosk disable      Turn the kiosk off
@@ -2601,13 +2604,101 @@ PY
 # logs what clients submit. It TRANSMITS and takes over the dongle, so it is
 # CLI-driven, takes the authorized-use ack, and pauses capture while it runs.
 
+# One diagnostic line: "  [ok] label - detail" / "  [--] ..." / "  [FAIL] ...".
+_ep_line() { printf '  [%s] %s\n' "$1" "$2"; }
+
 cmd_evil_portal_status() {
+    local ssid channel portal_ip iface active creds n
+    ssid=$(cfg evil-portal.ssid "Guest WiFi")
+    channel=$(cfg evil-portal.channel 1)
+    portal_ip=$(cfg evil-portal.portal_ip 10.0.0.1)
+    active=$(systemctl is-active "$PWN_EVIL_PORTAL_SERVICE" 2>/dev/null || echo inactive)
+
     echo "evil-portal:"
-    echo "  service: $(systemctl is-active "$PWN_EVIL_PORTAL_SERVICE" 2>/dev/null || echo inactive)"
-    echo "  config:  ssid=$(cfg evil-portal.ssid "Guest WiFi") channel=$(cfg evil-portal.channel 1) portal_ip=$(cfg evil-portal.portal_ip 10.0.0.1)"
-    local creds="$PWN_EVIL_PORTAL_DIR/creds.jsonl" n=0
-    [ -f "$creds" ] && n=$(grep -c . "$creds" 2>/dev/null || echo 0)
-    echo "  captured submissions: $n"
+    echo "  service:  $active"
+    echo "  config:   ssid='$ssid' channel=$channel portal_ip=$portal_ip"
+
+    if [ "$active" != active ]; then
+        echo "  (not running -- start it with: sudo kestrel evil-portal start)"
+        creds="$PWN_EVIL_PORTAL_DIR/creds.jsonl"; n=0
+        [ -f "$creds" ] && n=$(grep -c . "$creds" 2>/dev/null || echo 0)
+        echo "  captured submissions (lifetime): $n"
+        return
+    fi
+
+    echo "  --- live checks (the chain a client must traverse) ---"
+    iface=$(cat "$PWN_EVIL_PORTAL_DIR/iface" 2>/dev/null || echo "")
+
+    # 1. The AP radio.
+    if [ -z "$iface" ]; then
+        _ep_line FAIL "AP interface - launcher recorded none (did hostapd start?)"
+    elif iw dev "$iface" info 2>/dev/null | grep -q 'type AP'; then
+        _ep_line ok "AP radio - $iface is broadcasting '$ssid' (AP mode)"
+    else
+        _ep_line FAIL "AP radio - $iface is NOT in AP mode (hostapd failed)"
+    fi
+
+    # 2. The portal IP actually on the interface (the ordering bug symptom).
+    if [ -n "$iface" ] && ip -4 addr show dev "$iface" 2>/dev/null \
+            | grep -q "inet $portal_ip/"; then
+        _ep_line ok "portal IP - $portal_ip is on $iface (clients can reach it)"
+    else
+        _ep_line FAIL "portal IP - $portal_ip is NOT on $iface -- clients see 'connected, no internet' and the portal never opens"
+    fi
+
+    # 3. The :80 -> :8880 redirect (needs root to read the nat table).
+    if [ "$(id -u)" -ne 0 ]; then
+        _ep_line "--" "HTTP redirect - re-run with sudo to check the iptables rule"
+    elif [ -n "$iface" ] && iptables -t nat -C PREROUTING -i "$iface" \
+            -p tcp --dport 80 -j REDIRECT --to-ports 8880 2>/dev/null; then
+        _ep_line ok "HTTP redirect - :80 -> :8880 rule is installed on $iface"
+    else
+        _ep_line FAIL "HTTP redirect - the :80 -> :8880 rule is missing"
+    fi
+
+    # 4. The portal server itself (test it directly on :8880 -- the :80 redirect
+    #    only fires for traffic off the wire, not for a local curl, so this is
+    #    the honest check that the server is alive and serving a page).
+    local code=""
+    if command -v curl >/dev/null 2>&1; then
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
+               "http://127.0.0.1:8880/" 2>/dev/null || echo "")
+    fi
+    if [ "$code" = 200 ]; then
+        _ep_line ok "portal server - serving a page on :8880 (HTTP 200)"
+    elif [ -n "$code" ]; then
+        _ep_line FAIL "portal server - :8880 answered HTTP $code (expected 200)"
+    else
+        _ep_line FAIL "portal server - nothing answering on :8880 (portal process down)"
+    fi
+
+    # 4b. dnsmasq -- the DHCP + DNS server. If it isn't running, a phone can't
+    #     get an address (no lease) or resolve the probe, so nothing downstream
+    #     works no matter how healthy the AP and portal look.
+    if pgrep -x dnsmasq >/dev/null 2>&1; then
+        _ep_line ok "DHCP/DNS - dnsmasq is running (hands out leases, resolves every name to the portal)"
+    else
+        _ep_line FAIL "DHCP/DNS - dnsmasq is NOT running; clients get no address and the portal never opens"
+    fi
+
+    # 5. Clients that took a DHCP lease (proof a device actually joined). grep -c
+    #    prints 0 and exits 1 on no match, so `|| true` (not `|| echo 0`, which
+    #    would print a second 0 and break the numeric test).
+    local leases="$PWN_EVIL_PORTAL_DIR/leases" c=0
+    [ -f "$leases" ] && c=$(grep -c . "$leases" 2>/dev/null || true)
+    c=${c:-0}
+    if [ "$c" -gt 0 ]; then
+        _ep_line ok "clients - $c device(s) hold a DHCP lease"
+        awk '{printf "            %s  %s\n", $3, ($4=="*"?"":$4)}' "$leases" \
+            2>/dev/null || true
+    else
+        _ep_line "--" "clients - no device has taken a lease yet (join one, then re-check; or watch the live log below)"
+    fi
+
+    creds="$PWN_EVIL_PORTAL_DIR/creds.jsonl"; n=0
+    [ -f "$creds" ] && n=$(grep -c . "$creds" 2>/dev/null || true); n=${n:-0}
+    echo "  captured submissions (lifetime): $n"
+    echo "  live portal log: sudo journalctl -u $PWN_EVIL_PORTAL_SERVICE -f"
 }
 
 cmd_evil_portal_start() {
@@ -2642,6 +2733,180 @@ print(evilportal.format_creds(evilportal.load_creds(os.environ["PWN_CREDS"])))
 '
 }
 
+# --- portal profiles: your own network names + sign-in pages ----------------
+# A profile is a dir under $PWN_EVIL_PORTAL_PROFILES_DIR/<name>/ with index.html
+# (the sign-in page), an optional done.html, and a `meta` of ssid/channel. The
+# active profile is `[evil-portal] profile`; `use` also copies its ssid/channel
+# into [evil-portal] so the launcher (which reads those from config) broadcasts
+# the right name. Lab / authorized use only -- build pages that are honestly your
+# own; never imitate a real company or its login.
+
+_ep_valid_name() {
+    case "$1" in
+        ""|*[!A-Za-z0-9_-]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# Read one key (ssid|channel) from a profile's meta file, with a default.
+_ep_meta() {
+    local v
+    v=$(grep -E "^$2=" "$1/meta" 2>/dev/null | head -n1 | cut -d= -f2-)
+    printf '%s' "${v:-$3}"
+}
+
+cmd_evil_portal_profile_list() {
+    local active base d name ssid
+    active=$(cfg evil-portal.profile "")
+    base=$PWN_EVIL_PORTAL_PROFILES_DIR
+    if [ ! -d "$base" ] || [ -z "$(ls -A "$base" 2>/dev/null)" ]; then
+        echo "no portal profiles yet."
+        echo "create one: sudo kestrel evil-portal profile new <name> --ssid \"My WiFi\""
+        return
+    fi
+    echo "portal profiles (* = active):"
+    for d in "$base"/*/; do
+        [ -d "$d" ] || continue
+        name=$(basename "$d")
+        ssid=$(_ep_meta "$d" ssid "(unset)")
+        if [ "$name" = "$active" ]; then
+            printf '  * %-18s ssid=%s\n' "$name" "$ssid"
+        else
+            printf '    %-18s ssid=%s\n' "$name" "$ssid"
+        fi
+    done
+}
+
+cmd_evil_portal_profile_new() {
+    need_root
+    local name="" ssid=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --ssid) ssid=${2:-}; shift 2 ;;
+            -*) die "unknown option: $1" ;;
+            *) [ -z "$name" ] && name=$1 || die "unexpected argument: $1"; shift ;;
+        esac
+    done
+    _ep_valid_name "$name" || die "profile name must be letters, digits, - or _"
+    local dir="$PWN_EVIL_PORTAL_PROFILES_DIR/$name"
+    [ -e "$dir" ] && die "profile '$name' already exists (edit it, or delete it first)"
+    [ -f "$PWN_EVIL_PORTAL_SHARE/index.html" ] \
+        || die "shipped default sign-in page missing at $PWN_EVIL_PORTAL_SHARE"
+    mkdir -p "$dir"
+    chmod 0755 "$PWN_EVIL_PORTAL_PROFILES_DIR" "$dir"
+    # Seed from the shipped neutral page so it's immediately editable.
+    install -m 0644 "$PWN_EVIL_PORTAL_SHARE/index.html" "$dir/index.html"
+    [ -f "$PWN_EVIL_PORTAL_SHARE/done.html" ] \
+        && install -m 0644 "$PWN_EVIL_PORTAL_SHARE/done.html" "$dir/done.html"
+    [ -n "$ssid" ] || ssid="Guest WiFi"
+    printf 'ssid=%s\nchannel=%s\n' "$ssid" "$(cfg evil-portal.channel 1)" > "$dir/meta"
+    chmod 0644 "$dir/meta"
+    log "created profile '$name' (ssid '$ssid')."
+    log "edit its sign-in page:  sudo kestrel evil-portal profile edit $name"
+    log "make it active:         sudo kestrel evil-portal profile use $name"
+}
+
+cmd_evil_portal_profile_use() {
+    need_root
+    local name=${1:-}
+    _ep_valid_name "$name" || die "usage: evil-portal profile use <name>"
+    local dir="$PWN_EVIL_PORTAL_PROFILES_DIR/$name"
+    [ -f "$dir/index.html" ] || die "no such profile: $name"
+    local ssid ch
+    ssid=$(_ep_meta "$dir" ssid "Guest WiFi")
+    ch=$(_ep_meta "$dir" channel "$(cfg evil-portal.channel 1)")
+    config_set evil-portal profile "\"$name\""
+    printf '%s' "$ssid" | config_set_string evil-portal ssid
+    config_set evil-portal channel "$ch"
+    log "active portal is now '$name' (ssid '$ssid', channel $ch)"
+    if systemctl is-active --quiet "$PWN_EVIL_PORTAL_SERVICE" 2>/dev/null; then
+        log "it's running -- restart to apply: sudo kestrel evil-portal stop && sudo kestrel evil-portal start"
+    fi
+}
+
+cmd_evil_portal_profile_set_ssid() {
+    need_root
+    local name=${1:-} ssid=${2:-}
+    _ep_valid_name "$name" || die "usage: evil-portal profile set-ssid <name> <ssid>"
+    local dir="$PWN_EVIL_PORTAL_PROFILES_DIR/$name"
+    [ -d "$dir" ] || die "no such profile: $name"
+    [ -n "$ssid" ] || die "usage: evil-portal profile set-ssid <name> <ssid>"
+    printf 'ssid=%s\nchannel=%s\n' "$ssid" "$(_ep_meta "$dir" channel "$(cfg evil-portal.channel 1)")" > "$dir/meta"
+    log "profile '$name' ssid set to '$ssid'"
+    if [ "$(cfg evil-portal.profile "")" = "$name" ]; then
+        printf '%s' "$ssid" | config_set_string evil-portal ssid
+        log "it's the active profile; live ssid updated too"
+    fi
+}
+
+cmd_evil_portal_profile_edit() {
+    need_root
+    local name=${1:-}
+    _ep_valid_name "$name" || die "usage: evil-portal profile edit <name>"
+    local dir="$PWN_EVIL_PORTAL_PROFILES_DIR/$name"
+    [ -f "$dir/index.html" ] \
+        || die "no such profile: $name (create: sudo kestrel evil-portal profile new $name)"
+    "${EDITOR:-nano}" "$dir/index.html"
+    chmod 0644 "$dir/index.html"
+    log "saved profile '$name' sign-in page"
+}
+
+cmd_evil_portal_profile_import() {
+    need_root
+    local name=${1:-} file=${2:-}
+    _ep_valid_name "$name" || die "usage: evil-portal profile import <name> <htmlfile>"
+    [ -f "$file" ] || die "no such file: $file"
+    local dir="$PWN_EVIL_PORTAL_PROFILES_DIR/$name"
+    mkdir -p "$dir"; chmod 0755 "$PWN_EVIL_PORTAL_PROFILES_DIR" "$dir"
+    install -m 0644 "$file" "$dir/index.html"
+    [ -f "$dir/meta" ] \
+        || printf 'ssid=%s\nchannel=%s\n' "Guest WiFi" "$(cfg evil-portal.channel 1)" > "$dir/meta"
+    log "imported '$file' as the sign-in page for profile '$name'"
+}
+
+cmd_evil_portal_profile_show() {
+    local name=${1:-}
+    _ep_valid_name "$name" || die "usage: evil-portal profile show <name>"
+    local dir="$PWN_EVIL_PORTAL_PROFILES_DIR/$name"
+    [ -f "$dir/index.html" ] || die "no such profile: $name"
+    echo "profile: $name"
+    echo "  ssid:    $(_ep_meta "$dir" ssid "(unset)")"
+    echo "  channel: $(_ep_meta "$dir" channel "(default)")"
+    echo "  dir:     $dir"
+    echo "  --- index.html ---"
+    cat "$dir/index.html"
+}
+
+cmd_evil_portal_profile_delete() {
+    need_root
+    local name=${1:-}
+    _ep_valid_name "$name" || die "usage: evil-portal profile delete <name>"
+    local dir="$PWN_EVIL_PORTAL_PROFILES_DIR/$name"
+    [ -d "$dir" ] || die "no such profile: $name"
+    if [ "$(cfg evil-portal.profile "")" = "$name" ]; then
+        config_set evil-portal profile '""'
+        log "'$name' was the active profile; cleared it (falls back to the shipped page)"
+    fi
+    rm -rf "$dir"
+    log "deleted profile '$name'"
+}
+
+cmd_evil_portal_profile() {
+    [ $# -gt 0 ] || { cmd_evil_portal_profile_list; return; }
+    local sub=$1; shift
+    case "$sub" in
+        list|ls) cmd_evil_portal_profile_list ;;
+        new|create|add) cmd_evil_portal_profile_new "$@" ;;
+        use|select|activate) cmd_evil_portal_profile_use "$@" ;;
+        set-ssid|ssid|rename) cmd_evil_portal_profile_set_ssid "$@" ;;
+        edit) cmd_evil_portal_profile_edit "$@" ;;
+        import) cmd_evil_portal_profile_import "$@" ;;
+        show|cat) cmd_evil_portal_profile_show "$@" ;;
+        delete|rm|del) cmd_evil_portal_profile_delete "$@" ;;
+        *) die "unknown 'evil-portal profile' subcommand: $sub (list|new|use|set-ssid|edit|import|show|delete)" ;;
+    esac
+}
+
 cmd_evil_portal() {
     [ $# -gt 0 ] || { cmd_evil_portal_status; return; }
     local sub=$1; shift
@@ -2650,7 +2915,8 @@ cmd_evil_portal() {
         start) cmd_evil_portal_start "$@" ;;
         stop) cmd_evil_portal_stop ;;
         creds) cmd_evil_portal_creds ;;
-        *) die "unknown 'evil-portal' subcommand: $sub (status|start|stop|creds)" ;;
+        profile|profiles) cmd_evil_portal_profile "$@" ;;
+        *) die "unknown 'evil-portal' subcommand: $sub (status|start|stop|creds|profile)" ;;
     esac
 }
 

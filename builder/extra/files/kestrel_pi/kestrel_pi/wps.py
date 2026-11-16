@@ -157,6 +157,12 @@ def parse_reaver_progress(text):
               or "wps lock" in low or "detected ap rate" in low)
     if locked:
         out["locked"] = True
+    # An AP that answers every PIN with a WSC NACK is rejecting the external
+    # registrar outright (WPS-locked, ER disabled, or just not vulnerable). On
+    # its own one NACK is normal; the web card weighs this against elapsed time
+    # and a stuck percentage to call a target futile rather than "still trying".
+    if "wsc nack" in low:
+        out["nacking"] = True
     if _PSK_RE.search(text) or "wps pin:" in low:
         stage = "recovered"
     elif "pin not found" in low or "failed to recover" in low:
@@ -276,7 +282,7 @@ def live_attack(stream, wps_dir=WPS_DIR, bssid="", crack_dir=CRACK_DIR,
                "started_at": started,
                "stage": (outcome if (done and outcome) else prog.get("stage")),
                "done": bool(done)}
-        for key in ("percent", "rate", "locked", "associated", "last"):
+        for key in ("percent", "rate", "locked", "associated", "nacking", "last"):
             if key in prog:
                 rec[key] = prog[key]
         if done:

@@ -38,6 +38,28 @@ def test_route_portal_paths_serve_the_page():
         assert r.status == 200 and "<form" in r.body
 
 
+def test_signed_in_client_probe_gets_success_so_phone_shows_connected():
+    # Before sign-in a probe still redirects to the portal (pops the sheet)...
+    assert ep.route("GET", "/generate_204", {},
+                    host="connectivitycheck.gstatic.com").status == 302
+    # ...once authed, the same probe gets a success so the OS flips to connected.
+    android = ep.route("GET", "/generate_204", {},
+                       host="connectivitycheck.gstatic.com", authed=True)
+    assert android.status == 204 and android.body == ""
+    apple = ep.route("GET", "/hotspot-detect.html", {},
+                     host="captive.apple.com", authed=True)
+    assert apple.status == 200 and "Success" in apple.body
+    # a signed-in client browsing a normal page still just sees the portal
+    assert ep.route("GET", "/", {}, authed=True).status == 200
+
+
+def test_probe_success_shapes_per_os():
+    assert ep.probe_success("/generate_204").status == 204
+    assert "Success" in ep.probe_success("/hotspot-detect.html",
+                                         "captive.apple.com").body
+    assert "NCSI" in ep.probe_success("/ncsi.txt", "www.msftncsi.com").body
+
+
 def test_route_post_records_and_shows_done():
     fields = {"username": "alice", "password": "s3cret"}
     r = ep.route("POST", "/login", fields)
