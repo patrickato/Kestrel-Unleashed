@@ -422,6 +422,8 @@ sudo kestrel deauth AA:BB:CC:DD:EE:FF --channel 6 --count 16       # pin the cha
 
 Evil-portal stands up a generic captive portal: an **open Wi-Fi** on the capture dongle, a catch-all DNS that points every lookup at the device, and a **portal page** — the one you supply, or a neutral built-in — that **logs every field** a client submits. It uses the capture dongle in AP mode (it must support AP mode) and **pauses capture** while it runs; it never starts on its own.
 
+**What it captures (and what it can't).** The portal records **what a person types into your sign-in page** and submits — that's the attack: someone joins the open network, your page asks them to "sign in," and they hand over a real username and password. It is phishing via a fake login, so nothing lands in `creds` until someone actually fills in the form and submits it. It does **not** silently pull saved passwords, accounts, or other data off the phone — no captive portal can; the phone's OS walls all of that off from any web page. Once a client submits the form, the portal marks them **connected** (answers their OS connectivity check), so the phone stops showing "no internet" and dropping the network.
+
 From the dashboard (with the login on): the **Evil-portal** card (→ *Evil-portal* page) shows whether the portal is running and its SSID/channel, has **Start portal** / **Stop portal** buttons (Start asks the acknowledgment), and — because the submissions are plaintext — lists what clients submitted right on the page, but only while the dashboard login is on. From the terminal:
 
 ```bash
