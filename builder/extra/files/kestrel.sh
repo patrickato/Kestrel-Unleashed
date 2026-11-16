@@ -2672,19 +2672,31 @@ cmd_evil_portal_status() {
         _ep_line FAIL "portal server - nothing answering on :8880 (portal process down)"
     fi
 
-    # 5. Clients that took a DHCP lease (proof a device actually joined).
+    # 4b. dnsmasq -- the DHCP + DNS server. If it isn't running, a phone can't
+    #     get an address (no lease) or resolve the probe, so nothing downstream
+    #     works no matter how healthy the AP and portal look.
+    if pgrep -x dnsmasq >/dev/null 2>&1; then
+        _ep_line ok "DHCP/DNS - dnsmasq is running (hands out leases, resolves every name to the portal)"
+    else
+        _ep_line FAIL "DHCP/DNS - dnsmasq is NOT running; clients get no address and the portal never opens"
+    fi
+
+    # 5. Clients that took a DHCP lease (proof a device actually joined). grep -c
+    #    prints 0 and exits 1 on no match, so `|| true` (not `|| echo 0`, which
+    #    would print a second 0 and break the numeric test).
     local leases="$PWN_EVIL_PORTAL_DIR/leases" c=0
-    [ -f "$leases" ] && c=$(grep -c . "$leases" 2>/dev/null || echo 0)
+    [ -f "$leases" ] && c=$(grep -c . "$leases" 2>/dev/null || true)
+    c=${c:-0}
     if [ "$c" -gt 0 ]; then
         _ep_line ok "clients - $c device(s) hold a DHCP lease"
         awk '{printf "            %s  %s\n", $3, ($4=="*"?"":$4)}' "$leases" \
             2>/dev/null || true
     else
-        _ep_line "--" "clients - no device has taken a lease yet"
+        _ep_line "--" "clients - no device has taken a lease yet (join one, then re-check; or watch the live log below)"
     fi
 
     creds="$PWN_EVIL_PORTAL_DIR/creds.jsonl"; n=0
-    [ -f "$creds" ] && n=$(grep -c . "$creds" 2>/dev/null || echo 0)
+    [ -f "$creds" ] && n=$(grep -c . "$creds" 2>/dev/null || true); n=${n:-0}
     echo "  captured submissions (lifetime): $n"
     echo "  live portal log: sudo journalctl -u $PWN_EVIL_PORTAL_SERVICE -f"
 }
